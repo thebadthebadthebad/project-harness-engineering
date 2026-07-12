@@ -1,53 +1,37 @@
-# AGENTS.md
+# AGENTS
 
-## 역할
+이 파일의 규칙은 Harness Engineering Project와 모든 Engineering Task에 공통으로 적용된다. 하위 `AGENTS.md`는 이 규칙을 반복하지 않고 해당 범위의 추가 규칙만 정의한다.
 
-이 저장소는 반복 사용되는 공용 프로젝트 하네스 자체가 아니라, 다양한 AI Agent 프로젝트에서 재사용할 수 있는 공용 프로젝트 하네스를 설계하고 구축하는 메타 프로젝트다.
+## Common Rules
 
-Agent는 이 저장소에서 다음 두 층위를 구분한다.
+- `README.md`는 사람을 위한 문서이므로 기본 작업 컨텍스트로 읽지 않는다.
+- 현재 작업에 필요한 문서와 파일만 읽고 관련 없는 컨텍스트를 넓히지 않는다.
+- 기존 코드와 문서의 스타일을 우선하며 관련 없는 변경을 함께 수행하지 않는다.
+- 비밀 정보, 인증 정보, 개인 데이터를 문서나 Git에 기록하지 않는다.
+- 파일을 수정한 Agent가 가능한 범위의 검증을 수행하고 결과를 명확히 보고한다.
+- 새 문서나 디렉터리를 만들기 전에 기존 위치의 책임으로 관리할 수 있는지 확인한다.
 
-- 이 저장소의 작업 지식: `docs/`
-- 다른 프로젝트에 복사해 사용할 템플릿 산출물: `templates/project-harness/`
+## Project Session
 
-## 읽기 순서
+- 작업을 시작할 때 `PROJECT.md`와 `STATE.md`를 읽는다.
+- 저장소 구조, Task 생성, Promotion 절차가 필요할 때만 `STRUCTURE.md`를 읽는다.
+- 공용 템플릿 개선 작업은 루트 `tasks/_template/`을 복사해 Engineering Task로 생성한다.
+- Task 생성 결과를 사용자에게 확인받은 뒤 Task 수행 상태로 전환한다.
+- Task Agent를 직접 호출하거나 Task 수행 과정을 대신 관리하지 않는다.
+- 종료된 Task의 REPORT와 관련 파일을 검토해 `project/` 반영 계획을 작성한다.
+- `project/` 수정 전 계획과 수정 후 diff·검증 결과를 사용자에게 각각 확인받는다.
 
-작업을 시작할 때는 다음 순서로 문서를 확인한다.
+## Task Session
 
-1. `AGENTS.md`
-2. `docs/MAP.md`
-3. `docs/WORK.md`
+- 이 규칙을 계승한 뒤 Task의 `AGENTS.md`, `TASK.md`, `STATUS.md` 순서로 읽는다.
+- `PROJECT.md`, `STATE.md`, 전체 `STRUCTURE.md`는 기본 컨텍스트로 읽지 않는다. 필요한 정보는 TASK가 입력으로 지정해야 한다.
+- 수행 중에는 자신의 `tasks/<task-name>/` 내부만 수정한다.
+- 공용 배포본 `project/`, Project 공식 문서, Project `STATE.md`를 직접 수정하지 않는다.
+- 종료 시 REPORT를 완성하고 STATUS를 갱신한 뒤 사용자에게 Project 세션으로 돌아갈 수 있음을 알린다.
 
-필요할 때만 다음 문서를 읽는다.
+## Project-wide Rules
 
-- 목적과 범위가 필요하면 `docs/INTENT.md`
-- 구조와 경계가 필요하면 `docs/DESIGN.md`
-- 결정 이유가 필요하면 `docs/DECISIONS.md`
-- 템플릿 내용을 수정할 때는 `templates/project-harness/`의 대응 파일
-
-## Knowledge Ownership
-
-문서는 주제가 아니라 Knowledge Type의 owner다. 같은 사실을 여러 문서에 반복해서 쓰지 않는다.
-
-- Agent Protocol: `AGENTS.md`
-- Knowledge Map: `docs/MAP.md`
-- Project Intent: `docs/INTENT.md`
-- Work Context: `docs/WORK.md`
-- System Model: `docs/DESIGN.md`
-- Decision Record: `docs/DECISIONS.md`
-
-## 작성 규칙
-
-- 새 문서를 만들기 전에 기존 owner 문서에 추가할 수 있는지 먼저 판단한다.
-- 현재 상태는 `WORK.md`, 목적은 `INTENT.md`, 구조는 `DESIGN.md`, 이유는 `DECISIONS.md`에 쓴다.
-- 템플릿 산출물과 이 저장소 운영 문서를 혼동하지 않는다.
-- 문서는 한국어 중심으로 작성하되 파일명, 코드, 도구명, 일반 기술 용어는 영어를 자연스럽게 사용한다.
-- 임시 작업 메모는 장기 지식으로 확정되기 전까지 owner 문서에 과도하게 확산하지 않는다.
-
-## 작업 완료 시
-
-작업을 마칠 때 다음을 점검한다.
-
-- `docs/WORK.md`의 현재 상태가 최신인가?
-- 구조 변경은 `docs/DESIGN.md`에 반영됐는가?
-- 장기 결정은 `docs/DECISIONS.md`에 기록됐는가?
-- 템플릿 변경이 있었다면 `templates/project-harness/`와 현재 프로젝트 적용 문서가 서로 의도대로 다른가?
+- `project/`는 공용 배포본이며 Engineering Task의 작업 공간으로 사용하지 않는다.
+- `project/` 안의 문서는 배포될 템플릿의 규칙과 placeholder를 소유한다. 루트 문서의 현재 Engineering 상태를 복제하지 않는다.
+- 루트 `tasks/_template/`은 이 Engineering Project가 사용하는 설치본이고, `project/tasks/_template/`은 외부 배포용 원본이다.
+- 자동화는 문서 형식과 수동 운영이 안정된 뒤 별도 Task로 검토한다.
