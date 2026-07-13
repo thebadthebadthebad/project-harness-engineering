@@ -3,7 +3,7 @@
 ## Status
 
 
-doing
+completed
 
 허용값은 `todo`, `doing`, `completed`, `stopped`다.
 
@@ -17,15 +17,15 @@ doing
 
 | Work | Status |
 | --- | --- |
-| actual Hook smoke scenario 작성 | doing |
-| 독립 Codex session 실행 및 분석 | todo |
-| 전체 회귀 검증 | todo |
-| 최종 분석과 REPORT 완성 | todo |
+| actual Hook smoke scenario 작성 | completed |
+| 독립 Codex session 실행 및 분석 | completed |
+| 전체 회귀 검증 | completed |
+| 최종 분석과 REPORT 완성 | completed |
 
 Work Status는 `todo`, `doing`, `completed` 중 하나를 사용한다.
 
 ## Current Work
 
-actual Hook smoke scenario 작성
+None
 
 Task가 `completed` 또는 `stopped`이면 `None`으로 작성한다.
