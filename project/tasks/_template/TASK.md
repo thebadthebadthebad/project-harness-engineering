@@ -1,10 +1,6 @@
 # TASK
 
-이 문서는 Task 목표와 수행 계약을 정의한다. Project Agent가 Task 생성 시 작성하고, Task Agent는 이 계약에 따라 작업한다.
-
-## Goal
-
-TBD
+이 문서는 Task 수행 계약을 정의한다. Task의 Final Goal과 현재 실행 상태는 `STATUS.md`가 관리한다.
 
 ## Scope
 

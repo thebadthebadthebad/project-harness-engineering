@@ -1,6 +1,6 @@
 # REPORT
 
-이 문서는 Task 종료 시 Project Agent가 공유 대화 컨텍스트 없이 결과를 검토할 수 있도록 작성하는 최종 handoff 문서다.
+이 문서는 Task 종료 시 Project가 공유 대화 컨텍스트 없이 결과를 검토할 수 있도록 작성하는 최종 handoff 문서다.
 
 ## Outcome
 
@@ -10,7 +10,7 @@
 
 TBD
 
-## Goal and Result
+## Final Goal and Result
 
 TBD
 
@@ -24,7 +24,7 @@ TBD
 
 ## Relevant Files
 
-Project Agent가 확인해야 할 Task 파일만 기록한다. Promotion 대상이나 공식 목적지를 확정하지 않는다.
+Project가 확인해야 할 Task 파일의 경로와 의미를 기록한다.
 
 | Path | Type | Purpose |
 | --- | --- | --- |
