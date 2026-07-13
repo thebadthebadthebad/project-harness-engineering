@@ -3,7 +3,7 @@
 ## Status
 
 
-doing
+completed
 
 허용값은 `todo`, `doing`, `completed`, `stopped`다.
 
@@ -17,16 +17,16 @@ doing
 
 | Work | Status |
 | --- | --- |
-| analyzer 오탐 fixture와 acceptance 재정의 | doing |
-| parser·generation·compare 구현 | todo |
-| Hook 검증·run event 추출 구현 | todo |
-| 두 통제 시나리오 실행 | todo |
-| 최종 결과 분석과 REPORT 작성 | todo |
+| analyzer 오탐 fixture와 acceptance 재정의 | completed |
+| parser·generation·compare 구현 | completed |
+| Hook 검증·run event 추출 구현 | completed |
+| 두 통제 시나리오 실행 | completed |
+| 최종 결과 분석과 REPORT 작성 | completed |
 
 Work Status는 `todo`, `doing`, `completed` 중 하나를 사용한다.
 
 ## Current Work
 
-analyzer 오탐 fixture와 acceptance 재정의
+None
 
 Task가 `completed` 또는 `stopped`이면 `None`으로 작성한다.

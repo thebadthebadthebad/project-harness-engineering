@@ -11,12 +11,13 @@ import unittest
 from pathlib import Path
 
 
-REPOSITORY = Path(__file__).resolve().parents[1]
-TOOL = REPOSITORY / "tools/harness_experiment.py"
-SPEC = importlib.util.spec_from_file_location("harness_experiment", TOOL)
+TASK = Path(__file__).resolve().parents[2]
+REPOSITORY = TASK.parents[1]
+TOOL = TASK / "scripts/harness_experiment.py"
+SPEC = importlib.util.spec_from_file_location("candidate_harness_experiment", TOOL)
 HARNESS = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(HARNESS)
-HOOK_SPEC = importlib.util.spec_from_file_location("project_hook", REPOSITORY / "project/.codex/hooks/observe.py")
+HOOK_SPEC = importlib.util.spec_from_file_location("candidate_hook", TASK / "output/hook-observe.py")
 HOOK = importlib.util.module_from_spec(HOOK_SPEC)
 HOOK_SPEC.loader.exec_module(HOOK)
 

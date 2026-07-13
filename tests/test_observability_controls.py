@@ -6,6 +6,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -16,6 +17,9 @@ PUBLIC_TEMPLATE = REPOSITORY / "project"
 CANDIDATE = PUBLIC_TEMPLATE / "tools"
 PUBLIC_CONFIG = PUBLIC_TEMPLATE
 TASK_CONFIG = PUBLIC_TEMPLATE / "tasks/_template"
+sys.path.insert(0, str(PUBLIC_TEMPLATE / "tools"))
+
+from project_harness.observability import summarize_run  # noqa: E402
 HOOK_EVENTS = {
     "SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse",
     "PreCompact", "PostCompact", "SubagentStart", "SubagentStop", "Stop",
@@ -160,6 +164,21 @@ class ObservabilityControlsTest(unittest.TestCase):
         )
         self.assertNotEqual(0, result.returncode)
         self.assertIn("missing events: Stop", result.stderr)
+
+    def test_report_deduplicates_pre_and_post_for_one_tool_use(self) -> None:
+        events = [
+            {
+                "event": "hook",
+                "hook_event": hook,
+                "tool_use_id": "tool-one",
+                "documents": ["PROJECT.md"],
+                "projectctl_action": "context",
+            }
+            for hook in ("PreToolUse", "PostToolUse")
+        ]
+        summary = summarize_run("test", events, [])
+        self.assertEqual(1, summary["document_visits"]["PROJECT.md"])
+        self.assertEqual(1, summary["lifecycle_actions"]["context"])
 
 
 if __name__ == "__main__":

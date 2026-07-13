@@ -16,6 +16,7 @@
 
 
 
+
 Status는 `todo`, `doing`, `completed` 중 하나를 사용한다.
 
 완료 Task는 Current Goal이 유지되는 동안 표에 유지하며, 다음 Current Goal로 전환할 때 제거한다.
@@ -26,4 +27,4 @@ Status는 `todo`, `doing`, `completed` 중 하나를 사용한다.
 | --- | --- |
 | stabilize-workflow-core | completed |
 | add-observability-controls | completed |
-| validate-observable-workflow | doing |
+| validate-observable-workflow | completed |

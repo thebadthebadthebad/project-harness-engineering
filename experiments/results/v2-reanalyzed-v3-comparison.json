@@ -1,0 +1,93 @@
+{
+  "acceptance": {
+    "context_used_in_each_session": {
+      "after": true,
+      "before": true
+    },
+    "no_malformed_jsonl": {
+      "after": true,
+      "before": true
+    },
+    "no_parent_reads": {
+      "after": true,
+      "before": true
+    },
+    "no_projectctl_source_reads": {
+      "after": true,
+      "before": true
+    },
+    "no_task_project_lifecycle_commands": {
+      "after": true,
+      "before": true
+    },
+    "no_unchanged_repeated_markdown_reads": {
+      "after": true,
+      "before": false
+    },
+    "observability_no_malformed_jsonl": {
+      "after": true,
+      "before": null
+    },
+    "session_prompt_stop_hooks_observed": {
+      "after": true,
+      "before": null
+    }
+  },
+  "metrics": {
+    "totals.commands": {
+      "after": 42,
+      "before": 32,
+      "delta": 10
+    },
+    "totals.context_calls": {
+      "after": 3,
+      "before": 4,
+      "delta": -1
+    },
+    "totals.failed_commands": {
+      "after": 3,
+      "before": 1,
+      "delta": 2
+    },
+    "totals.file_changes": {
+      "after": 9,
+      "before": 10,
+      "delta": -1
+    },
+    "totals.markdown_read_commands": {
+      "after": 9,
+      "before": 8,
+      "delta": 1
+    },
+    "totals.markdown_reads": {
+      "after": 9,
+      "before": 22,
+      "delta": -13
+    },
+    "totals.parent_reads": {
+      "after": 0,
+      "before": 0,
+      "delta": 0
+    },
+    "totals.projectctl_source_reads": {
+      "after": 0,
+      "before": 0,
+      "delta": 0
+    },
+    "totals.task_project_lifecycle_commands": {
+      "after": 0,
+      "before": 0,
+      "delta": 0
+    },
+    "usage.input_tokens": {
+      "after": 477610,
+      "before": 539273,
+      "delta": -61663
+    },
+    "usage.output_tokens": {
+      "after": 9577,
+      "before": 15195,
+      "delta": -5618
+    }
+  }
+}

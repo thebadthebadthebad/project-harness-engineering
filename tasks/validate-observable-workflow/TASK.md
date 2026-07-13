@@ -47,6 +47,9 @@
 - `scripts/tests/test_harness_experiment.py`: parser, Hook 검증, compare 테스트
 - `output/scenarios/`: 새·수정 시나리오 candidate
 - `output/results/`: raw logs를 제외한 실험 REPORT, summary, manifest, 비교 결과
+- `output/hook-observe.py`: 문서 방문 오탐을 줄인 Hook candidate
+- `output/project-observability.py`: Pre/Post 관찰 중복을 제거한 보고서 candidate
+- `output/manage-project-workflow-SKILL.md`: 실험에서 반복된 CLI 오용을 줄이는 Skill candidate
 - `docs/notes/final-analysis.md`: 실험 결과 해석과 남은 한계
 
 ## Completion Criteria

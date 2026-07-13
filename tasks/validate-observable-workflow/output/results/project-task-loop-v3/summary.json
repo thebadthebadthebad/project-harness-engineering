@@ -1,0 +1,250 @@
+{
+  "acceptance": {
+    "context_used_in_each_session": true,
+    "no_malformed_jsonl": true,
+    "no_parent_reads": true,
+    "no_projectctl_source_reads": true,
+    "no_task_project_lifecycle_commands": true,
+    "no_unchanged_repeated_markdown_reads": true,
+    "observability_no_malformed_jsonl": true,
+    "session_prompt_stop_hooks_observed": true
+  },
+  "markdown_reads_by_path": {
+    ".agents/skills/run-task-workflow/SKILL.md": 1,
+    "PROJECT.md": 1,
+    "REPORT.md": 1,
+    "STATE.md": 1,
+    "STATUS.md": 1,
+    "tasks/_template/STATUS.md": 1,
+    "tasks/_template/TASK.md": 1,
+    "tasks/harness-loop-check/STATUS.md": 1,
+    "tasks/harness-loop-check/TASK.md": 1
+  },
+  "normalized_schema_coverage": {
+    "item_types": {
+      "agent_message": 20,
+      "command_execution": 42,
+      "error": 6,
+      "file_change": 6
+    }
+  },
+  "observability": {
+    "coverage": {
+      "expected_hook_events": [
+        "SessionStart",
+        "UserPromptSubmit",
+        "PreToolUse",
+        "PostToolUse",
+        "PreCompact",
+        "PostCompact",
+        "SubagentStart",
+        "SubagentStop",
+        "Stop"
+      ],
+      "missing_hook_events": [
+        "PreCompact",
+        "PostCompact",
+        "SubagentStart",
+        "SubagentStop"
+      ],
+      "observed_hook_events": [
+        "SessionStart",
+        "UserPromptSubmit",
+        "PreToolUse",
+        "PostToolUse",
+        "Stop"
+      ]
+    },
+    "sessions": [
+      {
+        "document_visits": {
+          "PROJECT.md": 1,
+          "STATE.md": 1,
+          "tasks/harness-loop-check/REPORT.md": 1,
+          "tasks/harness-loop-check/STATUS.md": 1
+        },
+        "event_types": {
+          "context": 1,
+          "hook": 29,
+          "skill": 1
+        },
+        "events": 31,
+        "hook_events": {
+          "PostToolUse": 13,
+          "PreToolUse": 13,
+          "SessionStart": 1,
+          "Stop": 1,
+          "UserPromptSubmit": 1
+        },
+        "lifecycle_actions": {
+          "check": 2,
+          "context": 1,
+          "observe.mark": 1,
+          "task.audit": 2,
+          "task.close": 1,
+          "task.handoff": 1,
+          "task.status": 3,
+          "task.validate": 2
+        },
+        "malformed": [],
+        "name": "project-close",
+        "skills": {
+          "manage-project-workflow": 1
+        }
+      },
+      {
+        "document_visits": {
+          "PROJECT.md": 3,
+          "STATE.md": 3,
+          "STATUS.md": 1,
+          "TASK.md": 1,
+          "tasks/_template/STATUS.md": 1,
+          "tasks/_template/TASK.md": 1,
+          "tasks/harness-loop-check/STATUS.md": 2,
+          "tasks/harness-loop-check/TASK.md": 2
+        },
+        "event_types": {
+          "context": 1,
+          "hook": 49,
+          "skill": 1
+        },
+        "events": 51,
+        "hook_events": {
+          "PostToolUse": 23,
+          "PreToolUse": 23,
+          "SessionStart": 1,
+          "Stop": 1,
+          "UserPromptSubmit": 1
+        },
+        "lifecycle_actions": {
+          "check": 1,
+          "context": 1,
+          "observe.mark": 1,
+          "task.create": 2,
+          "task.status": 3,
+          "task.validate": 2
+        },
+        "malformed": [],
+        "name": "project-setup",
+        "skills": {
+          "manage-project-workflow": 1
+        }
+      },
+      {
+        "document_visits": {
+          ".agents/skills/run-task-workflow/SKILL.md": 1,
+          "REPORT.md": 2,
+          "STATUS.md": 2,
+          "TASK.md": 1
+        },
+        "event_types": {
+          "context": 1,
+          "hook": 27,
+          "skill": 1
+        },
+        "events": 29,
+        "hook_events": {
+          "PostToolUse": 12,
+          "PreToolUse": 12,
+          "SessionStart": 1,
+          "Stop": 1,
+          "UserPromptSubmit": 1
+        },
+        "lifecycle_actions": {
+          "context": 1,
+          "observe.mark": 1,
+          "task.validate": 2
+        },
+        "malformed": [],
+        "name": "task-work",
+        "skills": {
+          "run-task-workflow": 1
+        }
+      }
+    ],
+    "totals": {
+      "events": 111,
+      "malformed": 0
+    }
+  },
+  "sessions": [
+    {
+      "commands": 13,
+      "context_calls": 1,
+      "failed_commands": 1,
+      "malformed": [],
+      "markdown_read_commands": 0,
+      "markdown_reads": 0,
+      "name": "project-close",
+      "parent_reads": [],
+      "projectctl_source_reads": 0,
+      "task_project_lifecycle_commands": 0,
+      "thread_id": "019f5bd0-d885-7ae0-9233-f5f61ecc71c7",
+      "unchanged_repeated_reads": {},
+      "usage": {
+        "cached_input_tokens": 120576,
+        "input_tokens": 131737,
+        "output_tokens": 2142,
+        "reasoning_output_tokens": 683
+      }
+    },
+    {
+      "commands": 21,
+      "context_calls": 1,
+      "failed_commands": 1,
+      "malformed": [],
+      "markdown_read_commands": 6,
+      "markdown_reads": 6,
+      "name": "project-setup",
+      "parent_reads": [],
+      "projectctl_source_reads": 0,
+      "task_project_lifecycle_commands": 0,
+      "thread_id": "019f5bce-04c3-7831-98a2-a0fcccedefd0",
+      "unchanged_repeated_reads": {},
+      "usage": {
+        "cached_input_tokens": 125696,
+        "input_tokens": 142101,
+        "output_tokens": 4709,
+        "reasoning_output_tokens": 1771
+      }
+    },
+    {
+      "commands": 8,
+      "context_calls": 1,
+      "failed_commands": 1,
+      "malformed": [],
+      "markdown_read_commands": 3,
+      "markdown_reads": 3,
+      "name": "task-work",
+      "parent_reads": [],
+      "projectctl_source_reads": 0,
+      "task_project_lifecycle_commands": 0,
+      "thread_id": "019f5bcf-a199-7e70-9033-f6f01bc16ce3",
+      "unchanged_repeated_reads": {},
+      "usage": {
+        "cached_input_tokens": 185088,
+        "input_tokens": 203772,
+        "output_tokens": 2726,
+        "reasoning_output_tokens": 700
+      }
+    }
+  ],
+  "totals": {
+    "commands": 42,
+    "context_calls": 3,
+    "failed_commands": 3,
+    "file_changes": 9,
+    "malformed": 0,
+    "markdown_read_commands": 9,
+    "markdown_reads": 9,
+    "parent_reads": 0,
+    "projectctl_source_reads": 0,
+    "task_project_lifecycle_commands": 0
+  },
+  "usage": {
+    "cached_input_tokens": 431360,
+    "input_tokens": 477610,
+    "output_tokens": 9577,
+    "reasoning_output_tokens": 3154
+  }
+}

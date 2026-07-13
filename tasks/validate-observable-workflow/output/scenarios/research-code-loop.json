@@ -1,0 +1,30 @@
+{
+  "name": "research-code-loop",
+  "sessions": [
+    {
+      "name": "project-research-setup",
+      "role": "project",
+      "cwd": ".",
+      "prompt": "Use $manage-project-workflow. This is a fresh Project session. Run context once. Set PROJECT Goal to 'Build a small evidence-backed CSV normalization utility' and Scope to 'Python standard library documentation, one utility, and local fixtures only'. Set Current Goal to 'Research and verify deterministic CSV normalization'. Create only Task csv-normalization-research with Final Goal 'Verify relevant Python csv behavior and implement a tested row normalizer'. The TASK must require official Python csv documentation evidence in docs/research, scripts/normalize_rows.py that trims string cells and sorts rows by name, a local fixture and output, and reproducible unittest validation. Complete the contract and Work Plan so ready validation passes. Do not activate or enter the Task session."
+    },
+    {
+      "name": "task-research-code",
+      "role": "task",
+      "cwd": "tasks/csv-normalization-research",
+      "before": [
+        ["python3", "tools/projectctl.py", "task", "validate", "csv-normalization-research", "--phase", "ready"],
+        ["python3", "tools/projectctl.py", "task", "activate", "csv-normalization-research"],
+        ["git", "add", "."],
+        ["git", "commit", "-m", "activate csv normalization research"],
+        ["python3", "tools/projectctl.py", "task", "baseline", "csv-normalization-research"]
+      ],
+      "prompt": "Use $run-task-workflow. This is the independent Task session. Run context once. Research only official Python documentation needed by the contract and record concise URLs and findings. Implement the simple standard-library normalizer and unittest fixture, run the tests, produce the required output, complete REPORT, set STATUS completed consistently, validate the completed phase, and stop for the human Project-session switch. Do not use a subagent because the work is small and sequential."
+    },
+    {
+      "name": "project-research-close",
+      "role": "project",
+      "cwd": ".",
+      "prompt": "Use $manage-project-workflow. This is a new Project session after the human switch. Run context once, review only the pending REPORT handoff and Relevant Files, run deterministic validation and audit, and close csv-normalization-research. Do not Promotion-copy any artifact and do not create an ADR."
+    }
+  ]
+}
