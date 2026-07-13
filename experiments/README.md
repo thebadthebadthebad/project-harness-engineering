@@ -6,6 +6,7 @@
 
 - `scenarios/project-task-loop.json`: 작은 결정적 산출물로 lifecycle과 handoff를 검증한다.
 - `scenarios/research-code-loop.json`: 공식 자료 조사, 코드, fixture, unittest, REPORT를 포함한 대표 작업을 검증한다.
+- `scenarios/hook-observability-smoke.json`: content read와 같은 Markdown 경로의 non-read diff를 실제 Hook에서 구분한다.
 
 각 시나리오는 Project setup → Task work → Project close의 서로 독립된 세션 세 개로 구성된다. runner의 자동 세션 연결은 사람이 같은 경계에서 전환하는 정상 운영을 재현하기 위한 실험 장치이지 공용 자동 오케스트레이션 기능이 아니다.
 

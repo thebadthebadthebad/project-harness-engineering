@@ -1,0 +1,11 @@
+{
+  "name": "hook-observability-smoke",
+  "sessions": [
+    {
+      "name": "project-hook-smoke",
+      "role": "project",
+      "cwd": ".",
+      "prompt": "This is a fresh Project session for a narrow observability smoke test. Run `python3 tools/projectctl.py context` exactly once. Then run `sed -n '1,12p' README.md` exactly once as the only Markdown content read, and run `git diff -- README.md` exactly once as a non-content check. Do not edit files, do not inspect any other Markdown file, do not use a Skill or subagent, and stop after reporting whether both commands succeeded."
+    }
+  ]
+}

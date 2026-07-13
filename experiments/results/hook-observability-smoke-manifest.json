@@ -1,0 +1,37 @@
+{
+  "codex_version": "codex-cli 0.144.1",
+  "full_access": true,
+  "hook_bundle": {
+    "config": ".codex/hooks.json",
+    "config_sha256": "86bb00ff195b7e0bb879cf71d044d46c3002574dbea45a62dc94b2c261ba97c7",
+    "events": [
+      "PostCompact",
+      "PostToolUse",
+      "PreCompact",
+      "PreToolUse",
+      "SessionStart",
+      "Stop",
+      "SubagentStart",
+      "SubagentStop",
+      "UserPromptSubmit"
+    ],
+    "handlers": 9,
+    "script": ".codex/hooks/observe.py",
+    "script_sha256": "a8e4bccc985f9c4648cff84f44dd10a5f17b69dde5e353a3e4bf9af5f4bfd7b5"
+  },
+  "hook_trust": "bypassed-after-local-verification",
+  "scenario": "hook-observability-smoke",
+  "scenario_sha256": "1c215a1618039f9f1d279f0c059c4721a9890c1baf7a6874f28e0a73b76c4ff8",
+  "sessions": [
+    {
+      "exit_code": 0,
+      "name": "project-hook-smoke",
+      "prompt_sha256": "3925cb1527534d86ea154f80496128226dfdf1cd0c7ce422ba09d666eee3dd9a",
+      "role": "project",
+      "run_id": "hook-observability-smoke-project-hook-smoke"
+    }
+  ],
+  "template_commit": "4763c06b796c55a771932640022f4973cd2cd334",
+  "template_dirty": false,
+  "template_snapshot_sha256": "0d042bd0a0200ab2b57631806c08a5530f868ed1818ff5ed2b3f08aa8a80dd54"
+}

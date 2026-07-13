@@ -48,11 +48,36 @@ This larger token count is an observation, not an acceptance target. It reflects
 
 The first report counted a document once in `PreToolUse` and again in `PostToolUse`, and the Hook extracted `.md` paths from non-read commands such as `git diff`. Raw events remain unchanged as evidence. The report candidate now deduplicates document and lifecycle observations by `tool_use_id`. The Hook candidate restricts document extraction to content-read commands and removes glob arguments and `rg --files` listings.
 
-The corrected Hook must be tested in a future real session after Promotion; current raw events were produced by the pre-correction Hook. This limitation is explicit rather than retroactively rewriting evidence.
+The corrected implementation was then tested in a fresh real Codex Project session. The session ran context once, read `README.md` once with `sed`, and ran `git diff -- README.md` once. It exited 0 with all hard acceptance checks passing. The content read produced Pre/Post events with one shared `tool_use_id` and the public report counted one visit; the diff events contained no document path.
+
+## Final Hook Smoke
+
+| Metric | Result |
+| --- | ---: |
+| Sessions with exit 0 | 1/1 |
+| Commands | 3 |
+| Failed commands | 0 |
+| File changes | 0 |
+| Context calls | 1 |
+| Markdown content reads | 1 |
+| Hook events | 10 |
+| Malformed Hook events | 0 |
+| Input tokens | 52,178 |
+| Output tokens | 304 |
+
+`projectctl observe report` independently summarized the Git-local run as PROJECT 1, STATE 1, README 1, and context lifecycle 1. SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, and Stop were observed. Compact and subagent events remained missing because the narrow sequential scenario did not trigger those actions.
 
 ## Content Review
 
-No Hook event contained `prompt`, `tool_input`, `tool_response`, full `command`, or `transcript_path` fields. A boundary-aware heuristic found no API key, private-key header, or password assignment pattern in either run. Raw Codex JSONL can still contain prompts and agent messages by design, remains ignored under `.harness/`, and must not be published without manual review.
+No Hook event in the lifecycle, research, or final smoke evidence contained `prompt`, `tool_input`, `tool_response`, full `command`, or `transcript_path` fields. A boundary-aware heuristic found no API key, private-key header, or password assignment pattern in the two larger runs. Raw Codex JSONL can still contain prompts and agent messages by design, remains ignored under `.harness/`, and must not be published without manual review.
+
+## Final Regression Status
+
+- Engineering root structure check: pass.
+- Public template structure check: pass.
+- Unit tests: 29 pass.
+- Project and Task Skills: both pass the official quick validator.
+- Final Hook smoke: 8/8 hard acceptance checks pass.
 
 ## Remaining Risks
 
@@ -60,3 +85,8 @@ No Hook event contained `prompt`, `tool_input`, `tool_response`, full `command`,
 - Custom agents inherit full access because bubblewrap is unavailable. Instructions limit them to reading, but this is not a security boundary.
 - Recovered CLI/validation failures add commands and tokens. Exact Skill command examples address the repeated status syntax error; validation-driven correction remains expected for research-shaped work.
 - The experiment automates session launches to reproduce a user-controlled boundary. It does not change the public operating rule that a person switches between normal Project and Task sessions.
+- Compact and subagent Hook events have not been actual-trigger tested. They were not invoked solely to fill coverage because the scenarios did not benefit from either action.
+
+## Overall Assessment
+
+The harness is ready for a user-run Project under its stated model: a person controls Project/Task session switches and Promotion judgment, while deterministic tools handle scaffolding, format validation, baselines, audits, handoffs, records, and content-free observability. Full access, incomplete Hook interception, and instructions-only custom agents remain explicit constraints rather than hidden security claims.

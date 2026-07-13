@@ -1,0 +1,113 @@
+{
+  "acceptance": {
+    "context_used_in_each_session": true,
+    "no_malformed_jsonl": true,
+    "no_parent_reads": true,
+    "no_projectctl_source_reads": true,
+    "no_task_project_lifecycle_commands": true,
+    "no_unchanged_repeated_markdown_reads": true,
+    "observability_no_malformed_jsonl": true,
+    "session_prompt_stop_hooks_observed": true
+  },
+  "markdown_reads_by_path": {
+    "README.md": 1
+  },
+  "observability": {
+    "coverage": {
+      "expected_hook_events": [
+        "SessionStart",
+        "UserPromptSubmit",
+        "PreToolUse",
+        "PostToolUse",
+        "PreCompact",
+        "PostCompact",
+        "SubagentStart",
+        "SubagentStop",
+        "Stop"
+      ],
+      "missing_hook_events": [
+        "PreCompact",
+        "PostCompact",
+        "SubagentStart",
+        "SubagentStop"
+      ],
+      "observed_hook_events": [
+        "SessionStart",
+        "UserPromptSubmit",
+        "PreToolUse",
+        "PostToolUse",
+        "Stop"
+      ]
+    },
+    "sessions": [
+      {
+        "document_visits": {
+          "PROJECT.md": 1,
+          "README.md": 1,
+          "STATE.md": 1
+        },
+        "event_types": {
+          "context": 1,
+          "hook": 9
+        },
+        "events": 10,
+        "hook_events": {
+          "PostToolUse": 3,
+          "PreToolUse": 3,
+          "SessionStart": 1,
+          "Stop": 1,
+          "UserPromptSubmit": 1
+        },
+        "lifecycle_actions": {
+          "context": 1
+        },
+        "malformed": [],
+        "name": "project-hook-smoke",
+        "skills": {}
+      }
+    ],
+    "totals": {
+      "events": 10,
+      "malformed": 0
+    }
+  },
+  "sessions": [
+    {
+      "commands": 3,
+      "context_calls": 1,
+      "failed_commands": 0,
+      "malformed": [],
+      "markdown_read_commands": 1,
+      "markdown_reads": 1,
+      "name": "project-hook-smoke",
+      "parent_reads": [],
+      "projectctl_source_reads": 0,
+      "task_project_lifecycle_commands": 0,
+      "unchanged_repeated_reads": {},
+      "usage": {
+        "cached_input_tokens": 47104,
+        "input_tokens": 52178,
+        "output_tokens": 304,
+        "reasoning_output_tokens": 0
+      }
+    }
+  ],
+  "totals": {
+    "commands": 3,
+    "context_calls": 1,
+    "failed_commands": 0,
+    "file_changes": 0,
+    "malformed": 0,
+    "markdown_read_commands": 1,
+    "markdown_reads": 1,
+    "parent_reads": 0,
+    "projectctl_source_reads": 0,
+    "task_project_lifecycle_commands": 0
+  },
+  "usage": {
+    "cached_input_tokens": 47104,
+    "input_tokens": 52178,
+    "output_tokens": 304,
+    "reasoning_output_tokens": 0
+  }
+}
