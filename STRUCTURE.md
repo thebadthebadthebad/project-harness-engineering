@@ -24,21 +24,12 @@ Task 세션은 full-access와 network 허용으로 실행한다. Project write�
 ## Public Template Promotion
 
 ```text
-Engineering Task completed 및 audit 통과
-    ↓
-사용자가 공용 템플릿 Promotion 요청
-    ↓
-Project Agent가 project/ 변경 계획 제시
-    ↓
-사용자 사전 확인
-    ↓
-Project Agent가 project/ 수정 및 검증
-    ↓
-사용자에게 diff와 검증 결과 제시
-    ↓
-사용자 사후 확인
-    ↓
-History 기록
+Engineering Task가 REPORT와 completed STATUS 작성
+→ Engineering Project가 handoff·audit·close
+→ Project가 결과 가치와 공식 위치 판단
+→ 필요한 결과만 project/ 또는 Engineering 공식 경로에 반영
+→ 구조 검사·관련 테스트
+→ promoted 또는 not-promoted 기록
 ```
 
 Task completed 상태는 알림만 만들며 Promotion을 자동 시작하지 않는다.
@@ -51,7 +42,16 @@ Task completed 상태는 알림만 만들며 Promotion을 자동 시작하지 �
 
 ## Deterministic Automation
 
-- 자동화: 세션 context 생성, Task scaffold, 코드 복사, data symlink, 상태·REPORT 형식, Git 기준점, checksum, 변경 감사, 종료 상태 반영
+- 자동화: 세션 context 생성, Task scaffold, 코드 복사, data symlink, 상태·REPORT 형식, Git 기준점, checksum, 변경 감사, 종료 상태와 이미 내려진 Promotion 결정 기록
 - 자동화하지 않음: Final Goal 결정, Scope·Workflow 작성, 결과 해석, Promotion 판단, ADR 판단, 자동 복구
-- `tools/harness_experiment.py`는 통제된 Codex 세션의 원본 JSONL과 정규화 액션 로그를 생성한다.
-- Hook과 Skill은 현재 구현에 포함하지 않는다. 통제 실험으로 도구만으로 해결되지 않는 반복 작업이 확인된 뒤 검토한다.
+- 명시 호출형 Project/Task Skills는 정해진 lifecycle 절차만 보조하고 판단이나 세션 전환을 대신하지 않는다.
+- Hook은 Git-local metadata로 문서 방문, context, Skill, lifecycle, compaction, subagent event를 관찰하며 작업을 차단하지 않는다.
+- custom agent는 사용자가 허용한 독립 읽기 작업만 대상으로 하고 full-access 환경의 보안 경계로 취급하지 않는다.
+- `tools/harness_experiment.py`는 통제된 독립 Codex 세션의 raw JSONL, 정규화 액션 로그, acceptance와 비교 보고서를 생성한다.
+
+## Validation
+
+- `python3 project/tools/projectctl.py --root project check`: 공용 템플릿 무결성
+- `python3 project/tools/projectctl.py --root . check`: Engineering Project 무결성
+- `python3 -m unittest discover -s tests -v`: 공용 도구·관찰·실험 회귀 테스트
+- `experiments/RESULTS.md`: 실제 Project/Task/Project 세션 결과와 남은 한계

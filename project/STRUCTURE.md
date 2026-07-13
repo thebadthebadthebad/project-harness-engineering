@@ -8,6 +8,7 @@
 - `STATE.md`: Current Goal과 현재 Goal에서 관리 중인 Task
 - `AGENTS.md`: 저장소 전체에 지속적으로 적용할 규칙
 - `STRUCTURE.md`: Project/Task 운영 구조와 결정적 도구 사용법
+- `GUIDE.md`: 사용자가 따라 하는 생성·세션 전환·장애 대응 절차
 - Task `TASK.md`: Scope, 입력, 절차, 산출물, 완료 조건
 - Task `STATUS.md`: Final Goal, Work Plan, Current Work, 현재 Status
 - Task `REPORT.md`: 종료된 Task의 최종 handoff
@@ -47,6 +48,10 @@ python3 tools/projectctl.py session task <task-name>
 ```
 
 런처는 신규 저장소의 config trust에 의존하지 않고 명시적으로 full-access와 approval 없음 옵션을 전달한다. 이 명령은 사용자가 세션을 여는 용도이며 Agent 자동 오케스트레이션 기능이 아니다.
+
+일반 세션은 repository Hook trust를 우회하지 않는다. 사용자는 처음 실행할 때 `.codex/hooks.json`의 명령과 script를 검토하고 `/hooks`에서 상태를 확인한다.
+
+Project/Task Skills는 `allow_implicit_invocation: false`인 명시 호출형이다. subagent는 사용자가 허용한 독립 읽기 작업에만 보수적으로 사용하며, full-access 환경의 지시상 제한을 sandbox 보안 경계로 취급하지 않는다.
 
 ## State
 
@@ -93,6 +98,8 @@ Task Agent가 작업을 멈춤(audit/close 실행 안 함)
     ↓
 projectctl task status로 completed 또는 stopped 알림 확인
     ↓
+projectctl task handoff로 REPORT 계약 확인
+    ↓
 projectctl task audit로 Task 외 Git 변경과 data checksum 검사
     ↓
 REPORT와 상태 검증 및 감사 통과 시 projectctl task close
@@ -103,7 +110,7 @@ stopped는 STATE에서 제거하고 stopped History 기록
 
 예상 외 변경은 자동 복구하지 않는다. Project Agent는 diff를 사용자에게 보여주고 수정 지시를 기다린다.
 
-Task completed는 Promotion 시작 조건이 아니다. Promotion은 사용자의 명시적 요청이 있을 때만 수행한다.
+Task completed는 handoff 검토 가능 시점을 결정한다. Promotion 시작 조건은 아니며 Promotion은 사용자가 결과 가치를 판단한 뒤 수행한다.
 
 ## Promotion
 
@@ -122,7 +129,18 @@ diff와 검증 결과를 사용자에게 제시
     ↓
 사용자 사후 확인
     ↓
-promoted 또는 not-promoted History 기록
+projectctl promotion record로 promoted 또는 not-promoted History 기록
 ```
 
-Promotion 가치 판단, 결과 해석, ADR 필요성 판단은 자동화하지 않는다.
+`promotion record`는 이미 내린 결정을 기록할 뿐 파일을 복사하거나 가치를 판단하지 않는다. Promotion 가치 판단, 결과 해석, ADR 필요성 판단은 자동화하지 않는다.
+
+## Deterministic Controls
+
+- `projectctl context`: 새 세션에 현재 계약과 종료 대기 handoff를 한 번 제공한다.
+- `projectctl check`: 필수 구조, 문서 section, STATE, ADR·History 이름, Hook·Skill·agent 설정을 검사한다.
+- `task validate`: lifecycle 단계별 STATUS, Work Plan, REPORT 형식을 검사한다.
+- `task baseline|audit`: clean Git 기준점, linked data checksum, Task 밖 변경을 검사한다.
+- `task status|handoff|close`: 종료 상태 탐지, 정규화 handoff, STATE와 History 반영을 수행한다.
+- `observe list|report`: Git-local Hook metadata를 내용 없는 집계 보고서로 만든다.
+
+Hook은 fail-open이고 관찰 coverage는 완전한 보안 감사를 의미하지 않는다. 형식 검사도 목표·결과의 품질 판단을 대신하지 않는다. 상세 실행 예제는 `GUIDE.md`가 담당한다.
