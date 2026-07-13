@@ -132,7 +132,7 @@ class ProjectctlTest(unittest.TestCase):
         self.assertEqual("Answer the question", payload["final_goal"])
         self.assertEqual("Defined scope", payload["contract"]["scope"])
         self.assertEqual({"TASK.md", "STATUS.md", "REPORT.md"}, set(payload["sources"]))
-        self.assertIn("task close", payload["session_boundary"]["do_not_run"])
+        self.assertNotIn("session_boundary", payload)
         from_project = self.command("context", "--task", "research-one", "--json")
         self.assertEqual("task", json.loads(from_project.stdout)["role"])
 
