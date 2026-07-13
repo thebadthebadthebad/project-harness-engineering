@@ -12,10 +12,11 @@
 
 ## Engineering Workflow
 
-Engineering Task 생성·실행·완료 절차는 공용 `project/STRUCTURE.md`와 동일하다. Engineering 루트에서는 다음 명령을 사용한다.
+Engineering Task 생성·실행·완료 절차는 공용 `project/STRUCTURE.md`와 동일하다. 새 세션에서는 context를 한 번 실행하며 Engineering 루트에서는 다음 명령을 사용한다.
 
 ```bash
-python project/tools/projectctl.py --root . task <command>
+python3 project/tools/projectctl.py --root . context
+python3 project/tools/projectctl.py --root . task <command>
 ```
 
 Task 세션은 full-access와 network 허용으로 실행한다. Project write는 sandbox로 차단하지 않으며 Git 기준점과 data checksum으로 예상 외 변경을 감사한다.
@@ -48,8 +49,9 @@ Task completed 상태는 알림만 만들며 Promotion을 자동 시작하지 �
 - History 파일명은 `YYYY-MM-DD-HHMM-<action>-<task-name>.md`를 사용한다.
 - History는 사건, Task 경로, 공식 반영 경로만 기록하고 REPORT를 요약하지 않는다.
 
-## Automation Boundary
+## Deterministic Automation
 
-- 자동화: Task scaffold, 코드 복사, data symlink, 상태 형식, Git 기준점, checksum, 변경 감사
+- 자동화: 세션 context 생성, Task scaffold, 코드 복사, data symlink, 상태·REPORT 형식, Git 기준점, checksum, 변경 감사, 종료 상태 반영
 - 자동화하지 않음: Final Goal 결정, Scope·Workflow 작성, 결과 해석, Promotion 판단, ADR 판단, 자동 복구
-- Hook과 Skill은 초기 구현에 포함하지 않는다.
+- `tools/harness_experiment.py`는 통제된 Codex 세션의 원본 JSONL과 정규화 액션 로그를 생성한다.
+- Hook과 Skill은 현재 구현에 포함하지 않는다. 통제 실험으로 도구만으로 해결되지 않는 반복 작업이 확인된 뒤 검토한다.

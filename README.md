@@ -12,3 +12,5 @@
 - `AGENTS.md`: Project와 Engineering Task가 함께 따르는 규칙
 - `tasks/`: 공용 템플릿을 조사·설계·검증하는 독립 Task
 - `project/`: 검토가 끝난 공용 Project 템플릿
+- `experiments/`: 공용 템플릿을 독립 Codex 세션으로 검증하는 시나리오와 실행 안내
+- `tools/harness_experiment.py`: 통제 실험 실행 및 JSONL 액션 로그 분석기

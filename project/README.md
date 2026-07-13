@@ -12,10 +12,11 @@ TBD
 
 1. `PROJECT.md`에 프로젝트 목표와 범위를 작성한다.
 2. `STATE.md`에 현재 목표와 현재 목표에 필요한 Task를 작성한다.
-3. 새 Task는 `python tools/projectctl.py task create ...`로 만든다.
-4. 생성 결과를 확인한 뒤 Task를 activate하고 baseline을 만든다.
-5. Task 종료 후 audit와 acknowledge를 수행한다.
-6. Promotion은 사용자가 명시적으로 요청할 때만 검토한다.
+3. 새 Project 세션에서 `python3 tools/projectctl.py context`로 현재 운영 정보를 한 번 확인한다.
+4. 새 Task는 `python3 tools/projectctl.py task create ...`로 만든다.
+5. 생성 결과를 확인한 뒤 Task를 activate하고 baseline을 만든다.
+6. Task Agent가 REPORT와 STATUS를 종료 상태로 작성하면 Project 세션으로 돌아와 `task close`를 수행한다.
+7. Promotion은 사용자가 명시적으로 요청할 때만 검토한다.
 
 ## Reference Documents
 

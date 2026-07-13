@@ -1,0 +1,27 @@
+{
+  "name": "project-task-loop",
+  "sessions": [
+    {
+      "name": "project-setup",
+      "cwd": ".",
+      "prompt": "새 Project 세션이다. context 명령을 한 번 사용해 현재 상태를 확인하라. 간단한 재현 가능성 점검 Project 목표와 Current Goal을 작성하고, 필요한 Task를 계획하되 첫 Task harness-loop-check만 생성하라. TASK와 STATUS를 실행 가능한 계약으로 완성하고 activate 전 사용자 확인 지점에서 멈춰라."
+    },
+    {
+      "name": "task-work",
+      "cwd": "tasks/harness-loop-check",
+      "before": [
+        ["python3", "tools/projectctl.py", "task", "validate", "harness-loop-check", "--phase", "ready"],
+        ["python3", "tools/projectctl.py", "task", "activate", "harness-loop-check"],
+        ["git", "add", "."],
+        ["git", "commit", "-m", "activate harness loop check"],
+        ["python3", "tools/projectctl.py", "task", "baseline", "harness-loop-check"]
+      ],
+      "prompt": "독립 Task 세션이다. context 명령을 한 번 사용하고 TASK 계약을 수행하라. 현재 Task와 명시된 입력만 탐색하라. 작은 결과 파일을 만들고 검증한 뒤 REPORT를 완성하고 Work Plan, Current Work, Status를 completed 상태와 일치시켜라."
+    },
+    {
+      "name": "project-close",
+      "cwd": ".",
+      "prompt": "새 Project 세션이다. context 명령을 한 번 사용해 종료된 Task를 확인하라. REPORT와 Relevant Files를 검토하고 결정적 검증 및 audit를 수행한 뒤 task close로 종료를 반영하라. Promotion은 요청되지 않았으므로 수행하지 마라."
+    }
+  ]
+}

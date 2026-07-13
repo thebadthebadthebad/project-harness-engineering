@@ -12,5 +12,7 @@ Status는 `todo`, `doing`, `completed` 중 하나를 사용한다.
 
 완료 Task는 Current Goal이 유지되는 동안 표에 유지하며, 다음 Current Goal로 전환할 때 제거한다.
 
-| Task | Status | Path | Note |
-| --- | --- | --- | --- |
+중지 Task는 Project가 `task close`로 확인하면 이 표에서 제거하고 History에 남긴다.
+
+| Task | Status |
+| --- | --- |

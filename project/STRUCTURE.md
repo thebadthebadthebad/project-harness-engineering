@@ -12,6 +12,8 @@
 - Task `STATUS.md`: Final Goal, Work Plan, Current Work, 현재 Status
 - Task `REPORT.md`: 종료된 Task의 최종 handoff
 
+Agent는 새 세션 또는 컨텍스트 압축 후 `projectctl context`를 한 번 실행해 이 문서들의 현재 운영 정보를 함께 확인한다. 같은 세션의 매 요청마다 문서를 다시 읽지 않는다.
+
 ## Directory Responsibilities
 
 - `src/`: 공식 제품·라이브러리·런타임 코드
@@ -37,13 +39,14 @@ Task 내부 디렉터리는 다음 책임을 가진다.
 - Task 시작 전 Git 기준점과 linked data checksum을 저장하고 종료 후 예상 외 변경을 감사한다.
 - 감사는 우발적 변경 감지 장치이며 악의적 변경을 막는 보안 경계가 아니다.
 
-Task 세션은 Task 디렉터리에서 다음 명령으로 시작한다.
+Project와 Task 세션은 사용자 shell에서 다음 명령으로 시작한다.
 
 ```bash
-codex -C tasks/<task-name> --strict-config
+python3 tools/projectctl.py session project
+python3 tools/projectctl.py session task <task-name>
 ```
 
-Task의 `.codex/config.toml`은 `sandbox_mode = "danger-full-access"`, `approval_policy = "never"`를 적용한다.
+런처는 신규 저장소의 config trust에 의존하지 않고 명시적으로 full-access와 approval 없음 옵션을 전달한다. 이 명령은 사용자가 세션을 여는 용도이며 Agent 자동 오케스트레이션 기능이 아니다.
 
 ## State
 
@@ -54,6 +57,8 @@ Project STATE Status는 `todo`, `doing`, `completed`만 사용한다.
 - `completed`: Task STATUS가 completed이고 변경 감사까지 통과했다.
 
 Task STATUS는 `todo`, `doing`, `completed`, `stopped`를 사용한다. STATUS와 STATE는 로그가 아니며 현재 내용만 유지한다.
+
+STATE의 Current Tasks 표는 Task 이름과 Project 상태만 기록한다. Task 경로는 이름으로 결정하며 중지 Task는 Project가 종료를 확인하면 표에서 제거한다.
 
 ## Task Creation
 
@@ -82,15 +87,18 @@ projectctl task baseline 실행
 ```text
 Task Agent가 REPORT 작성 및 STATUS completed
     ↓
+Task Agent가 작업을 멈춤(audit/close 실행 안 함)
+    ↓
 사용자가 Project 세션으로 복귀
     ↓
-projectctl task status로 completed 알림 확인
+projectctl task status로 completed 또는 stopped 알림 확인
     ↓
 projectctl task audit로 Task 외 Git 변경과 data checksum 검사
     ↓
-감사 통과 시 projectctl task acknowledge
+REPORT와 상태 검증 및 감사 통과 시 projectctl task close
     ↓
-STATE completed 및 completed History 기록
+completed는 STATE completed와 History 기록
+stopped는 STATE에서 제거하고 stopped History 기록
 ```
 
 예상 외 변경은 자동 복구하지 않는다. Project Agent는 diff를 사용자에게 보여주고 수정 지시를 기다린다.

@@ -4,7 +4,9 @@
 
 ## Outcome
 
-`completed` 또는 `stopped`
+TBD
+
+허용값은 `completed` 또는 `stopped`다.
 
 ## Summary
 
