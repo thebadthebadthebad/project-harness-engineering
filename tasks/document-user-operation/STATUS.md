@@ -3,7 +3,7 @@
 ## Status
 
 
-doing
+completed
 
 허용값은 `todo`, `doing`, `completed`, `stopped`다.
 
@@ -17,16 +17,16 @@ doing
 
 | Work | Status |
 | --- | --- |
-| 현재 구현과 문서의 불일치 조사 | doing |
-| 사용자 운영 가이드 후보 작성 | todo |
-| 공식 참조 문서 변경 후보 작성 | todo |
-| 전체 회귀 검증 및 결과 분석 | todo |
-| REPORT handoff 완성 | todo |
+| 현재 구현과 문서의 불일치 조사 | completed |
+| 사용자 운영 가이드 후보 작성 | completed |
+| 공식 참조 문서 변경 후보 작성 | completed |
+| 전체 회귀 검증 및 결과 분석 | completed |
+| REPORT handoff 완성 | completed |
 
 Work Status는 `todo`, `doing`, `completed` 중 하나를 사용한다.
 
 ## Current Work
 
-현재 구현과 문서의 불일치 조사
+None
 
 Task가 `completed` 또는 `stopped`이면 `None`으로 작성한다.
