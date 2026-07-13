@@ -19,6 +19,25 @@ PUBLIC_TEMPLATE = REPOSITORY / "project"
 sys.path.insert(0, str(CANDIDATE))
 
 from project_harness.documents import atomic_write_text  # noqa: E402
+from project_harness.lifecycle import check_project  # noqa: E402
+
+
+def copy_engineering_fixture(destination: Path) -> None:
+    """Build a minimal Engineering root with one managed public template."""
+    destination.mkdir()
+    for name in ("AGENTS.md", "PROJECT.md", "README.md", "STATE.md", "STRUCTURE.md"):
+        shutil.copy2(REPOSITORY / name, destination / name)
+    (destination / "STATE.md").write_text(
+        "# STATE\n\n## Current Goal\n\nFixture\n\n## Current Tasks\n\n"
+        "| Task | Status |\n| --- | --- |\n"
+    )
+    shutil.copytree(REPOSITORY / "tasks/_template", destination / "tasks/_template")
+    (destination / "docs/adr").mkdir(parents=True)
+    (destination / "docs/history").mkdir()
+    (destination / "tools").mkdir()
+    for name in ("create_project.py", "harness_experiment.py"):
+        shutil.copy2(REPOSITORY / "tools" / name, destination / "tools" / name)
+    shutil.copytree(PUBLIC_TEMPLATE, destination / "project")
 
 
 class WorkflowCoreTest(unittest.TestCase):
@@ -184,6 +203,23 @@ class WorkflowCoreTest(unittest.TestCase):
         (self.root / "docs/adr/2026-bad.md").write_text("# bad\n")
         invalid = self.command("check", ok=False)
         self.assertIn("invalid ADR filename", invalid.stderr)
+
+    def test_engineering_root_does_not_require_product_directories(self) -> None:
+        root = Path(self.temporary.name) / "engineering"
+        copy_engineering_fixture(root)
+        self.assertEqual([], check_project(root))
+
+    def test_engineering_root_reports_nested_public_error(self) -> None:
+        root = Path(self.temporary.name) / "engineering"
+        copy_engineering_fixture(root)
+        shutil.rmtree(root / "project/src")
+        self.assertIn("project: missing src/", check_project(root))
+
+    def test_public_project_still_requires_product_directories(self) -> None:
+        root = Path(self.temporary.name) / "public"
+        shutil.copytree(PUBLIC_TEMPLATE, root)
+        shutil.rmtree(root / "src")
+        self.assertIn("missing src/", check_project(root))
 
     def test_atomic_write_preserves_original_on_replace_failure(self) -> None:
         path = self.root / "atomic.txt"

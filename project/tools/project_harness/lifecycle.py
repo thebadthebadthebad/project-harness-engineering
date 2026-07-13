@@ -469,18 +469,34 @@ def promotion_record(
     return history
 
 
+def managed_public_template(root: Path) -> Path | None:
+    """Return the public template managed by an Engineering root, if present."""
+    tools = root / "tools"
+    if (tools / "create_project.py").is_file() and (tools / "harness_experiment.py").is_file():
+        return root / "project"
+    return None
+
+
 def check_project(root: Path) -> list[str]:
     """Return deterministic structure, state, naming, and config integrity errors."""
     errors: list[str] = []
+    public_template = managed_public_template(root)
     required_files = ("AGENTS.md", "PROJECT.md", "README.md", "STATE.md", "STRUCTURE.md")
-    required_directories = ("src", "tools", "data", "docs/adr", "docs/history", "tasks/_template")
+    required_directories = (
+        ("tools", "docs/adr", "docs/history", "tasks/_template", "project")
+        if public_template is not None
+        else ("src", "tools", "data", "docs/adr", "docs/history", "tasks/_template")
+    )
     for relative in required_files:
         if not (root / relative).is_file():
             errors.append("missing " + relative)
     for relative in required_directories:
         if not (root / relative).is_dir():
             errors.append("missing " + relative + "/")
-    if not (root / "tools/projectctl.py").is_file() and not (root / "project/tools/projectctl.py").is_file():
+    if public_template is not None:
+        if not (public_template / "tools/projectctl.py").is_file():
+            errors.append("missing project/tools/projectctl.py")
+    elif not (root / "tools/projectctl.py").is_file():
         errors.append("missing projectctl.py")
     template = root / "tasks/_template"
     for relative in TASK_FILES:
@@ -612,4 +628,10 @@ def check_project(root: Path) -> list[str]:
                     errors.append(str(path.relative_to(root)) + ": missing " + field)
             if "sandbox_mode" in text:
                 errors.append(str(path.relative_to(root)) + ": sandbox_mode is unsupported in this environment")
+    if (
+        public_template is not None
+        and public_template.is_dir()
+        and (public_template / "tools/projectctl.py").is_file()
+    ):
+        errors.extend("project: " + error for error in check_project(public_template))
     return errors

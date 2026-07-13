@@ -2,4 +2,5 @@
 
 - Task: tasks/support-engineering-structure-check
 - Report: tasks/support-engineering-structure-check/REPORT.md
-- Promotion: not evaluated
+- Promotion: promoted
+- Official paths: project/tools/project_harness/lifecycle.py, tests/test_workflow_core.py
