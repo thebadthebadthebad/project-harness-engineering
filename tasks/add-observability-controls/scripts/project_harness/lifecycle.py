@@ -472,7 +472,7 @@ def promotion_record(
 def check_project(root: Path) -> list[str]:
     """Return deterministic structure, state, naming, and config integrity errors."""
     errors: list[str] = []
-    required_files = ("AGENTS.md", "PROJECT.md", "README.md", "STATE.md", "STRUCTURE.md", "tools/projectctl.py")
+    required_files = ("AGENTS.md", "PROJECT.md", "README.md", "STATE.md", "STRUCTURE.md")
     required_directories = ("src", "tools", "data", "docs/adr", "docs/history", "tasks/_template")
     for relative in required_files:
         if not (root / relative).is_file():
@@ -480,6 +480,8 @@ def check_project(root: Path) -> list[str]:
     for relative in required_directories:
         if not (root / relative).is_dir():
             errors.append("missing " + relative + "/")
+    if not (root / "tools/projectctl.py").is_file() and not (root / "project/tools/projectctl.py").is_file():
+        errors.append("missing projectctl.py")
     template = root / "tasks/_template"
     for relative in TASK_FILES:
         if not (template / relative).is_file():
@@ -537,8 +539,77 @@ def check_project(root: Path) -> list[str]:
     if hooks_config.exists():
         try:
             payload = json.loads(hooks_config.read_text())
-            if not isinstance(payload.get("hooks"), dict):
+            hooks = payload.get("hooks")
+            if not isinstance(hooks, dict):
                 errors.append(".codex/hooks.json: hooks must be an object")
+            else:
+                expected = {
+                    "SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse",
+                    "PreCompact", "PostCompact", "SubagentStart", "SubagentStop", "Stop",
+                }
+                missing = sorted(expected - set(hooks))
+                if missing:
+                    errors.append(".codex/hooks.json: missing events: " + ", ".join(missing))
+                for event, groups in hooks.items():
+                    if not isinstance(groups, list):
+                        errors.append(".codex/hooks.json: invalid groups for " + event)
+                        continue
+                    for group in groups:
+                        handlers = group.get("hooks") if isinstance(group, dict) else None
+                        if not isinstance(handlers, list):
+                            errors.append(".codex/hooks.json: invalid handlers for " + event)
+                            continue
+                        for handler in handlers:
+                            if not isinstance(handler, dict) or handler.get("type") != "command":
+                                errors.append(".codex/hooks.json: non-command handler for " + event)
+                            elif ".codex/hooks/observe.py" not in str(handler.get("command", "")):
+                                errors.append(".codex/hooks.json: unexpected command for " + event)
+                            timeout = handler.get("timeout", 600) if isinstance(handler, dict) else 600
+                            if not isinstance(timeout, int) or not 1 <= timeout <= 10:
+                                errors.append(".codex/hooks.json: invalid timeout for " + event)
         except json.JSONDecodeError as error:
             errors.append(".codex/hooks.json: " + str(error))
+        if not (root / ".codex/hooks/observe.py").is_file():
+            errors.append("missing .codex/hooks/observe.py")
+        config = root / ".codex/config.toml"
+        if not config.is_file():
+            errors.append("missing .codex/config.toml")
+        else:
+            config_text = config.read_text()
+            if not re.search(r"(?m)^hooks\s*=\s*true\s*$", config_text):
+                errors.append(".codex/config.toml: hooks must be true")
+            threads = re.search(r"(?m)^max_threads\s*=\s*(\d+)\s*$", config_text)
+            depth = re.search(r"(?m)^max_depth\s*=\s*(\d+)\s*$", config_text)
+            if not threads or not 1 <= int(threads.group(1)) <= 3:
+                errors.append(".codex/config.toml: max_threads must be 1..3")
+            if not depth or int(depth.group(1)) != 1:
+                errors.append(".codex/config.toml: max_depth must be 1")
+        ignore = root / ".gitignore"
+        if not ignore.is_file() or ".harness/" not in ignore.read_text().splitlines():
+            errors.append(".gitignore must contain .harness/")
+    for skill_root in (root / ".agents/skills", template / ".agents/skills"):
+        if not skill_root.is_dir():
+            continue
+        for skill in sorted(path for path in skill_root.iterdir() if path.is_dir()):
+            instructions = skill / "SKILL.md"
+            metadata = skill / "agents/openai.yaml"
+            if not instructions.is_file():
+                errors.append("missing " + str(instructions.relative_to(root)))
+            elif "TODO" in instructions.read_text():
+                errors.append(str(instructions.relative_to(root)) + ": contains TODO")
+            if not metadata.is_file():
+                errors.append("missing " + str(metadata.relative_to(root)))
+            elif not re.search(
+                r"(?m)^\s*allow_implicit_invocation:\s*false\s*$", metadata.read_text()
+            ):
+                errors.append(str(metadata.relative_to(root)) + ": implicit invocation must be false")
+    agents = root / ".codex/agents"
+    if agents.is_dir():
+        for path in sorted(agents.glob("*.toml")):
+            text = path.read_text()
+            for field in ("name", "description", "developer_instructions"):
+                if not re.search(r"(?m)^" + field + r"\s*=", text):
+                    errors.append(str(path.relative_to(root)) + ": missing " + field)
+            if "sandbox_mode" in text:
+                errors.append(str(path.relative_to(root)) + ": sandbox_mode is unsupported in this environment")
     return errors

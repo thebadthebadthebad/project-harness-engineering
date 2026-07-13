@@ -1,0 +1,7 @@
+interface:
+  display_name: "Manage Project Workflow"
+  short_description: "Run explicit Project lifecycle checkpoints safely"
+  default_prompt: "Use $manage-project-workflow to perform the next explicit Project lifecycle checkpoint."
+
+policy:
+  allow_implicit_invocation: false

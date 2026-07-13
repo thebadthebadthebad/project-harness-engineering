@@ -1,0 +1,7 @@
+interface:
+  display_name: "Run Task Workflow"
+  short_description: "Execute one Task contract and prepare its handoff"
+  default_prompt: "Use $run-task-workflow to execute the current Task contract and prepare its handoff."
+
+policy:
+  allow_implicit_invocation: false

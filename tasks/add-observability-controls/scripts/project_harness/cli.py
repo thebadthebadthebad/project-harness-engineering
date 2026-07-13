@@ -28,7 +28,7 @@ from .lifecycle import (
     report_handoff,
     require_task,
 )
-from .observability import record_event
+from .observability import list_runs, record_event, write_report
 from .repository import find_project_root, task_path
 
 
@@ -177,6 +177,25 @@ def observe_mark_command(args: argparse.Namespace) -> None:
     print("marked skill " + args.name)
 
 
+def observe_list_command(args: argparse.Namespace) -> None:
+    """List Git-local observability runs newest first."""
+    runs = list_runs(_root(args))
+    if args.json:
+        _print_json(runs)
+        return
+    for item in runs:
+        print(item["run_id"] + "\t" + item["modified"] + "\t" + str(item["bytes"]) + " bytes")
+
+
+def observe_report_command(args: argparse.Namespace) -> None:
+    """Write a metadata-only Markdown and JSON report for one run."""
+    path, summary = write_report(_root(args), args.run_id, args.latest, args.output)
+    if args.json:
+        _print_json(summary)
+    else:
+        print(path)
+
+
 def _set_handler(parser: argparse.ArgumentParser, handler: Handler, guard: str) -> None:
     """Attach a handler and Task-session guard category to an argparse parser."""
     parser.set_defaults(handler=handler, guard=guard)
@@ -251,6 +270,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     observe = commands.add_parser("observe")
     observe_commands = observe.add_subparsers(dest="observe_command", required=True)
+    list_command = observe_commands.add_parser("list")
+    list_command.add_argument("--json", action="store_true")
+    _set_handler(list_command, observe_list_command, "project")
+    report = observe_commands.add_parser("report")
+    report.add_argument("run_id", nargs="?")
+    report.add_argument("--latest", action="store_true")
+    report.add_argument("--output", type=Path)
+    report.add_argument("--json", action="store_true")
+    _set_handler(report, observe_report_command, "project")
     mark = observe_commands.add_parser("mark")
     mark_types = mark.add_subparsers(dest="marker_type", required=True)
     skill = mark_types.add_parser("skill")
