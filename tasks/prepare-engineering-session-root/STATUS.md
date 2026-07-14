@@ -3,7 +3,7 @@
 ## Status
 
 
-doing
+completed
 
 허용값은 `todo`, `doing`, `completed`, `stopped`다.
 
@@ -17,15 +17,15 @@ doing
 
 | Work | Status |
 | --- | --- |
-| 새 세션 bootstrap과 상태 전환 설계 | doing |
-| 루트 .codex 후보 작성 | todo |
-| Task-local 검증 | todo |
-| REPORT handoff 완성 | todo |
+| 새 세션 bootstrap과 상태 전환 설계 | completed |
+| 루트 .codex 후보 작성 | completed |
+| Task-local 검증 | completed |
+| REPORT handoff 완성 | completed |
 
 Work Status는 `todo`, `doing`, `completed` 중 하나를 사용한다.
 
 ## Current Work
 
-새 세션 bootstrap과 상태 전환 설계
+None
 
 Task가 `completed` 또는 `stopped`이면 `None`으로 작성한다.
