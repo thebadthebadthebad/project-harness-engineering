@@ -9,6 +9,8 @@
 - 루트 `tasks/_template/`: Engineering Project가 사용하는 Task 템플릿
 - `project/tasks/_template/`: 공용 배포용 Task 템플릿
 - `project/tools/projectctl.py`: Engineering 루트와 배포 Project가 함께 사용하는 결정적 관리 도구
+- 루트 `.codex/`: Harness Engineering 세션의 full-access, Hooks와 보수적 custom agents
+- `project/.codex/`: 새 Project에 배포하는 공용 Codex 설정
 
 ## Engineering Workflow
 
@@ -54,4 +56,5 @@ Task completed 상태는 알림만 만들며 Promotion을 자동 시작하지 �
 - `python3 project/tools/projectctl.py --root project check`: 공용 템플릿 무결성
 - `python3 project/tools/projectctl.py --root . check`: Engineering Project 무결성
 - `python3 -m unittest discover -s tests -v`: 공용 도구·관찰·실험 회귀 테스트
+- `cmp .codex/hooks/observe.py project/.codex/hooks/observe.py`: Engineering과 배포 Hook source 동기화
 - `experiments/RESULTS.md`: 실제 Project/Task/Project 세션 결과와 남은 한계

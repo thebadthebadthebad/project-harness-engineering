@@ -4,7 +4,7 @@
 
 ## Current Goal
 
-재구성된 공용 Project/Task 템플릿을 실제 운영을 통해 검증하고 안정화한다.
+공용 하네스를 실제 사용자 프로젝트에 적용하고, 사용 중 확인된 문제만 독립 Engineering Task로 개선한다.
 
 ## Current Tasks
 
@@ -37,10 +37,3 @@ Status는 `todo`, `doing`, `completed` 중 하나를 사용한다.
 
 | Task | Status |
 | --- | --- |
-| stabilize-workflow-core | completed |
-| add-observability-controls | completed |
-| validate-observable-workflow | completed |
-| document-user-operation | completed |
-| support-engineering-structure-check | completed |
-| verify-final-harness | completed |
-| prepare-engineering-session-root | completed |
