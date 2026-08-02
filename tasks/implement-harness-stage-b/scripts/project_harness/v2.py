@@ -482,6 +482,8 @@ def create_v2_task(
     acceptance: Sequence[str],
     owned_write_paths: Sequence[str],
     validation_commands: Sequence[Sequence[str]],
+    execution: dict[str, Any] | None = None,
+    context_refs: Sequence[str] = (),
 ) -> dict[str, Any]:
     """Create one ready v2 Task contract."""
     require_v2(root)
@@ -492,6 +494,9 @@ def create_v2_task(
         raise HarnessError("Task already exists")
     for raw in owned_write_paths:
         safe_relative(raw)
+    owned_paths = list(owned_write_paths)
+    if execution is not None and ".harness-agent-handoff.json" not in owned_paths:
+        owned_paths.append(".harness-agent-handoff.json")
     record = _new_record(
         "task",
         task_id,
@@ -502,9 +507,10 @@ def create_v2_task(
         outputs=list(outputs),
         acceptance=list(acceptance),
         dependencies=[],
-        context_refs=[],
-        owned_write_paths=list(owned_write_paths),
+        context_refs=list(context_refs),
+        owned_write_paths=owned_paths,
         validation_commands=[list(item) for item in validation_commands],
+        execution=execution,
         state={"task_status": "ready", "base_commit": None},
     )
     write_json(path, record)
@@ -553,6 +559,12 @@ def render_task(root: Path, task_id: str) -> str:
     lines.extend("- `" + item + "`" for item in task.get("owned_write_paths", []))
     lines.extend(["", "## Acceptance", ""])
     lines.extend("- " + item for item in task.get("acceptance", []))
+    lines.extend(["", "## Context References", ""])
+    lines.extend("- `" + item + "`" for item in task.get("context_refs", []))
+    if task.get("execution") is not None:
+        lines.extend(["", "## Codex Execution Contract", "", "```json"])
+        lines.append(json.dumps(task["execution"], ensure_ascii=False, indent=2, sort_keys=True))
+        lines.extend(["```", ""])
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -877,4 +889,236 @@ def render_promotion(root: Path, promotion_id: str) -> str:
     lines.extend(["", "## Validation", ""])
     for item in payload["validation"]:
         lines.append("- `" + " ".join(item["argv"]) + "`: exit " + str(item["exit_code"]))
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def request_decision(
+    root: Path,
+    task_id: str,
+    title: str,
+    reason: str,
+    options: Sequence[dict[str, Any]],
+    recommended: str,
+    safe_default: str | None,
+    deferrable: bool,
+) -> dict[str, Any]:
+    """Create one blocking, Task-local user decision request."""
+    require_v2(root)
+    task = read_task(root, task_id)
+    if task["state"].get("task_status") not in {"active", "needs_decision"}:
+        raise HarnessError("decision requests require an active Task")
+    option_ids = [str(item.get("id", "")) for item in options]
+    if not options or any(not item for item in option_ids) or len(option_ids) != len(set(option_ids)):
+        raise HarnessError("decision options require unique ids")
+    if recommended not in option_ids:
+        raise HarnessError("recommended decision option is unavailable")
+    if safe_default is not None and safe_default not in option_ids:
+        raise HarnessError("safe default decision option is unavailable")
+    decision_id = "decision-" + task_id + "-" + uuid.uuid4().hex[:8]
+    record = _new_record(
+        "decision",
+        decision_id,
+        task_id=task_id,
+        status="pending",
+        title=title,
+        reason=reason,
+        options=list(options),
+        recommended=recommended,
+        safe_default=safe_default,
+        deferrable=deferrable,
+        resolution=None,
+    )
+    write_json(harness_root(root) / "decisions" / (decision_id + ".json"), record)
+    state = dict(task["state"])
+    state.update({"task_status": "needs_decision", "decision_id": decision_id})
+    _replace_record(task_record_path(root, task_id), task, state=state)
+    _bump_generation(root)
+    return record
+
+
+def read_decision(root: Path, decision_id: str) -> dict[str, Any]:
+    """Read and validate one decision record."""
+    if not TASK_ID.fullmatch(decision_id):
+        raise HarnessError("invalid decision id")
+    payload = read_json(harness_root(root) / "decisions" / (decision_id + ".json"))
+    validate_record(payload, "decision")
+    return payload
+
+
+def render_decision(root: Path, decision_id: str) -> str:
+    """Render a decision request with recommendation and impacts."""
+    decision = read_decision(root, decision_id)
+    lines = [
+        "# Decision " + decision_id,
+        "",
+        "- Task: " + decision["task_id"],
+        "- Status: " + decision["status"],
+        "- Can defer: " + str(decision["deferrable"]).lower(),
+        "- Safe default: " + str(decision.get("safe_default") or "none"),
+        "",
+        "## Decision",
+        "",
+        decision["title"],
+        "",
+        "## Why It Is Needed",
+        "",
+        decision["reason"],
+        "",
+        "## Options",
+        "",
+    ]
+    for item in decision["options"]:
+        marker = " (recommended)" if item["id"] == decision["recommended"] else ""
+        lines.append(
+            "- **" + item["id"] + marker + "** — " + item["label"] + ": " + item["impact"]
+        )
+    if decision.get("resolution"):
+        lines.extend(["", "## Resolution", "", json.dumps(decision["resolution"], ensure_ascii=False)])
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def resolve_decision(
+    root: Path,
+    decision_id: str,
+    choice: str,
+    actor: str,
+    note: str,
+) -> dict[str, Any]:
+    """Resolve one pending decision and resume only its Task."""
+    require_v2(root)
+    decision = read_decision(root, decision_id)
+    if decision["status"] != "pending":
+        raise HarnessError("decision is already resolved")
+    if choice not in {item["id"] for item in decision["options"]}:
+        raise HarnessError("unknown decision choice")
+    path = harness_root(root) / "decisions" / (decision_id + ".json")
+    decision = _replace_record(
+        path,
+        decision,
+        status="resolved",
+        resolution={"choice": choice, "actor": actor, "note": note, "resolved_at": utc_now()},
+    )
+    task = read_task(root, decision["task_id"])
+    state = dict(task["state"])
+    state.pop("decision_id", None)
+    state["task_status"] = "blocked" if choice == "stop" else "active"
+    state["last_decision_id"] = decision_id
+    _replace_record(task_record_path(root, task["id"]), task, state=state)
+    _bump_generation(root)
+    return decision
+
+
+def _result_index_path(root: Path) -> Path:
+    return harness_root(root) / "results/index.json"
+
+
+def add_result(
+    root: Path,
+    result_id: str,
+    kind: str,
+    summary: str,
+    source_refs: Sequence[str],
+    artifact_refs: Sequence[str],
+    verification_status: str,
+    reusable: bool,
+    supersedes: str | None,
+) -> dict[str, Any]:
+    """Add one discoverable result and update the small canonical index."""
+    require_v2(root)
+    if not TASK_ID.fullmatch(result_id):
+        raise HarnessError("result id must use lowercase kebab-case")
+    if kind not in {"experiment", "failure", "review", "decision", "asset"}:
+        raise HarnessError("unsupported result kind")
+    if verification_status not in {"unverified", "reviewed", "verified", "rejected"}:
+        raise HarnessError("invalid result verification status")
+    path = harness_root(root) / "results" / (result_id + ".json")
+    if path.exists():
+        raise HarnessError("result already exists")
+    for raw in artifact_refs:
+        safe_relative(raw)
+    record = _new_record(
+        "result",
+        result_id,
+        kind=kind,
+        summary=summary,
+        source_refs=list(source_refs),
+        artifact_refs=list(artifact_refs),
+        verification_status=verification_status,
+        reusable=reusable,
+        supersedes=supersedes,
+    )
+    write_json(path, record)
+    index_path = _result_index_path(root)
+    if index_path.is_file():
+        index = read_json(index_path)
+        validate_record(index, "result")
+        entries = list(index.get("entries", []))
+        entries.append(
+            {
+                "id": result_id,
+                "kind": kind,
+                "summary": summary,
+                "verification_status": verification_status,
+                "reusable": reusable,
+                "supersedes": supersedes,
+                "digest": record["content_digest"],
+            }
+        )
+        _replace_record(index_path, index, entries=entries)
+    else:
+        write_json(
+            index_path,
+            _new_record(
+                "result",
+                "result-index",
+                kind="index",
+                entries=[
+                    {
+                        "id": result_id,
+                        "kind": kind,
+                        "summary": summary,
+                        "verification_status": verification_status,
+                        "reusable": reusable,
+                        "supersedes": supersedes,
+                        "digest": record["content_digest"],
+                    }
+                ],
+            ),
+        )
+    _bump_generation(root)
+    return record
+
+
+def list_results(root: Path) -> list[dict[str, Any]]:
+    """Return compact result-index entries."""
+    path = _result_index_path(root)
+    if not path.is_file():
+        return []
+    index = read_json(path)
+    validate_record(index, "result")
+    return list(index.get("entries", []))
+
+
+def render_result(root: Path, result_id: str) -> str:
+    """Render one reusable result for human review."""
+    result = read_json(harness_root(root) / "results" / (result_id + ".json"))
+    validate_record(result, "result")
+    lines = [
+        "# Result " + result_id,
+        "",
+        "- Kind: " + result["kind"],
+        "- Verification: " + result["verification_status"],
+        "- Reusable: " + str(result["reusable"]).lower(),
+        "- Supersedes: " + str(result.get("supersedes") or "none"),
+        "",
+        "## Summary",
+        "",
+        result["summary"],
+        "",
+        "## Source References",
+        "",
+    ]
+    lines.extend("- `" + item + "`" for item in result.get("source_refs", []))
+    lines.extend(["", "## Artifacts", ""])
+    lines.extend("- `" + item + "`" for item in result.get("artifact_refs", []))
     return "\n".join(lines).rstrip() + "\n"
