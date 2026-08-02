@@ -9,6 +9,20 @@
 - 공용 bundle의 `managed` 파일은 checksum 기반으로 갱신한다. `bootstrap` 파일은 없을 때만 만들고, `integration` 파일은 기존 사용자 내용을 보존한다.
 - root distribution의 `harnessctl`은 `package|new|apply|update`를 담당한다. 적용 뒤 각 Project의 로컬 `tools/projectctl.py`가 상태와 Task를 담당하므로 중앙 설치에 실행 의존하지 않는다.
 
+## Responsibility Boundaries
+
+- Rules와 `AGENTS.md`: Project 전체의 지속 제약, authority와 역할 경계를 정의한다.
+- Skills: 사용자가 명시 호출하는 반복 절차를 설명하며 상태 원본이나 보안 경계가 아니다.
+- Hooks: 실행 관찰과 빠른 형식 신호를 제공하되 fail-open이며 lifecycle 결정을 대신하지 않는다.
+- Workflow와 `projectctl`: Task·Decision·Result·Promotion 상태 전이와 검증을 결정론적으로 수행한다.
+- Codex adapter: Task context와 실행 계약을 실제 CLI argv로 변환하고 JSONL·structured handoff를 회수한다.
+- Task Agent와 subagent: 명시된 scope와 file ownership 안에서 산출물과 근거를 만든다. Subagent는 objective, inputs, context refs, owned paths, typed outputs 계약이 필요하다.
+- Parent Agent: handoff 주장·validation·diff를 검토하고 후보를 선택·통합한다. Agent 결과를 자동으로 공식 사실로 승격하지 않는다.
+- User: 목표·범위·가치 판단, 추가 권한, 외부 변경과 exact-diff Promotion을 승인한다.
+- Deterministic scripts: bundle checksum, schema/digest, worktree, validation, diff, index와 상태 전이를 담당한다.
+
+이 책임들은 versioned bundle의 `AGENTS.md`, `.agents/`, `.codex/`, `tools/`, `tasks/_template/`, `GUIDE.md`, `STRUCTURE.md`에 각각 포함된다. 인증 정보, 적용 Project 목록과 Git-local run evidence는 bundle에 포함하지 않는다.
+
 ## Document Roles
 
 - `PROJECT.md`: 프로젝트의 안정적인 Goal과 Scope
@@ -61,6 +75,12 @@ Task JSON 생성·commit
 ```
 
 Task worktree와 integration worktree는 자동 삭제하지 않는다. Validation 실패, 후보 밖 변경, 승인 후 diff 변경, dirty official worktree는 반영을 차단한다.
+
+Stage B에서는 active Task를 `task run`으로 Codex adapter에 넘길 수 있다. Adapter는 Project goal, Task contract, 검증된 context references와 Agent 역할만 bounded prompt로 구성한다. 최종 출력은 `completed`, `needs_decision`, `blocked` 중 하나이며, completed handoff도 parent review 뒤에만 Promotion 후보가 된다.
+
+권한·외부 변경·범위 확대가 필요하면 해당 Task에 pending Decision record를 만들고 `needs_decision`으로 바꾼다. Decision View는 이유, 선택지, 권고, 각 영향, safe default와 보류 가능성을 보여준다. Explicit resolve는 그 Task만 active 또는 blocked로 전환한다.
+
+Result index는 범용 graph가 아니다. `experiment|failure|review|decision|asset`의 짧은 요약, source/artifact refs, 검증 상태, 재사용 여부와 supersedes만 보존하며 후속 Task는 `result:<id>`처럼 참조한다.
 
 Project와 Task 세션은 사용자 shell에서 다음 명령으로 시작한다.
 

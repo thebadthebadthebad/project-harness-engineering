@@ -8,6 +8,9 @@
 - context가 제공한 PROJECT, STATE, pending Task handoff를 별도로 다시 읽지 않는다. 문서를 수정할 때만 필요한 부분을 확인한다.
 - 문서 전체의 TBD·상태를 반복 탐색하지 않고 `projectctl check`와 `projectctl task validate` 결과를 사용한다.
 - v2 Task는 `task create|show|start|submit|review`로, exact-diff 반영은 `promotion prepare|show|approve|apply`로 수행한다. Legacy authority에서만 기존 `activate|baseline|audit|close`와 `promotion record`를 사용한다.
+- Codex 실행 계약이 있는 v2 Task는 `task run`으로 실행한다. 요청·실제 model/reasoning/sandbox/approval/web·network/tool·MCP·skill/budget/fallback을 run evidence에 남기며 추가 권한·외부 변경·범위 확대를 자동 승인하지 않는다.
+- `needs_decision` Task만 정지시키고 `decision show|resolve`로 사용자가 명시적으로 선택할 때 재개한다. 다른 독립 Task의 상태는 변경하지 않는다.
+- 검증된 실험·실패·리뷰·결정·재사용 자산만 `result add`로 색인하고 후속 Task는 stable `kind:id` context reference를 사용한다.
 - v2 Task 결과는 지정된 별도 Git worktree와 `owned_write_paths` 안에서만 작성한다. 공식 Project 변경은 parent Agent가 handoff와 validation을 검토하고 사용자가 승인한 Promotion packet으로만 수행한다.
 - `.harness`의 canonical JSON은 Git에 추적한다. Git-local runtime, Task·integration worktree와 승인 전 packet은 공식 지식이 아니며 provenance 확인 없이 자동 삭제하지 않는다.
 - 함수는 역할·입력·출력이 드러나게 작성하고 재사용 가능한 작은 경계를 사용한다. 이해하기 쉬운 단순 구현을 우선하고 변경한 코드는 관련 검증을 수행한다.

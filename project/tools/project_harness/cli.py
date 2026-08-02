@@ -30,7 +30,9 @@ from .lifecycle import (
 )
 from .observability import list_runs, record_event, write_report
 from .repository import find_project_root, task_path
+from .adapter import capability_probe, execute_task
 from .v2 import (
+    add_result,
     apply_promotion,
     approve_promotion,
     authority_mode,
@@ -43,10 +45,15 @@ from .v2 import (
     migration_switch,
     migration_verify,
     prepare_promotion,
+    list_results,
+    render_decision,
     render_handoff_review,
     render_project,
     render_promotion,
     render_task,
+    render_result,
+    request_decision,
+    resolve_decision,
     start_v2_task,
     submit_handoff,
 )
@@ -151,6 +158,39 @@ def create_command(args: argparse.Namespace) -> None:
     root = _root(args)
     if authority_mode(root) == "v2":
         commands = [shlex.split(item) for item in (args.validation_command or [])]
+        execution = None
+        if args.codex:
+            execution = {
+                key: value
+                for key, value in {
+                    "model": args.model,
+                    "reasoning_effort": args.reasoning_effort,
+                    "reasoning_fallback": args.reasoning_fallback,
+                    "sandbox": args.sandbox,
+                    "approval_policy": args.approval_policy,
+                    "web_mode": args.web_mode,
+                    "network_access": args.network_access,
+                    "allowed_tools": args.allowed_tool,
+                    "allowed_mcp": args.allowed_mcp,
+                    "allowed_skills": args.allowed_skill,
+                    "limits": {
+                        key: value for key, value in {
+                            "seconds": args.time_limit,
+                            "tokens": args.token_limit,
+                        }.items() if value is not None
+                    },
+                    "fallback": {
+                        "allow_missing_mcp": args.allow_missing_mcp,
+                        "allow_reasoning_downgrade": not args.no_reasoning_downgrade,
+                    },
+                    "agent": {
+                        "role": args.agent_role or "implementation",
+                        "parent_review_required": True,
+                        "may_delegate": args.may_delegate,
+                    },
+                }.items()
+                if value is not None and value != {}
+            }
         payload = create_v2_task(
             root,
             args.name,
@@ -160,6 +200,8 @@ def create_command(args: argparse.Namespace) -> None:
             args.acceptance or [],
             args.owned_path or [],
             commands,
+            execution,
+            args.context_ref or [],
         )
         _print_json(payload)
         return
@@ -185,6 +227,67 @@ def task_submit_command(args: argparse.Namespace) -> None:
 def task_review_command(args: argparse.Namespace) -> None:
     """Render a typed Task handoff for parent-Agent review."""
     print(render_handoff_review(_root(args), args.name), end="")
+
+
+def task_run_command(args: argparse.Namespace) -> None:
+    """Execute one active Task through the Codex adapter."""
+    _print_json(execute_task(_root(args), args.name, args.codex_bin))
+
+
+def doctor_codex_command(args: argparse.Namespace) -> None:
+    """Print the capabilities used for contract normalization."""
+    _print_json(capability_probe(args.codex_bin))
+
+
+def _parse_option(raw: str) -> dict[str, str]:
+    """Parse one id|label|impact decision option."""
+    parts = raw.split("|", 2)
+    if len(parts) != 3 or not all(parts):
+        raise HarnessError("decision option must use id|label|impact")
+    return {"id": parts[0], "label": parts[1], "impact": parts[2]}
+
+
+def decision_request_command(args: argparse.Namespace) -> None:
+    """Create a Task-local structured decision request."""
+    _print_json(
+        request_decision(
+            _root(args), args.task, args.title, args.reason,
+            [_parse_option(item) for item in args.option], args.recommended,
+            args.safe_default, args.deferrable,
+        )
+    )
+
+
+def decision_show_command(args: argparse.Namespace) -> None:
+    """Render one decision for user review."""
+    print(render_decision(_root(args), args.decision_id), end="")
+
+
+def decision_resolve_command(args: argparse.Namespace) -> None:
+    """Resolve one pending decision explicitly."""
+    _print_json(
+        resolve_decision(_root(args), args.decision_id, args.choice, args.actor, args.note)
+    )
+
+
+def result_add_command(args: argparse.Namespace) -> None:
+    """Add one minimal reusable result record."""
+    _print_json(
+        add_result(
+            _root(args), args.result_id, args.kind, args.summary, args.source_ref or [],
+            args.artifact_ref or [], args.verification_status, args.reusable, args.supersedes,
+        )
+    )
+
+
+def result_list_command(args: argparse.Namespace) -> None:
+    """List compact result index entries."""
+    _print_json(list_results(_root(args)))
+
+
+def result_show_command(args: argparse.Namespace) -> None:
+    """Render one indexed result."""
+    print(render_result(_root(args), args.result_id), end="")
 
 
 def validate_command(args: argparse.Namespace) -> None:
@@ -390,6 +493,24 @@ def build_parser() -> argparse.ArgumentParser:
     create.add_argument("--acceptance", action="append")
     create.add_argument("--owned-path", action="append")
     create.add_argument("--validation-command", action="append")
+    create.add_argument("--context-ref", action="append")
+    create.add_argument("--codex", action="store_true")
+    create.add_argument("--model")
+    create.add_argument("--reasoning-effort")
+    create.add_argument("--reasoning-fallback", action="append")
+    create.add_argument("--sandbox", choices=("read-only", "workspace-write", "danger-full-access"))
+    create.add_argument("--approval-policy", choices=("untrusted", "on-request", "never"))
+    create.add_argument("--web-mode", choices=("disabled", "cached", "indexed", "live"))
+    create.add_argument("--network-access", action=argparse.BooleanOptionalAction, default=None)
+    create.add_argument("--allowed-tool", action="append")
+    create.add_argument("--allowed-mcp", action="append")
+    create.add_argument("--allowed-skill", action="append")
+    create.add_argument("--time-limit", type=int)
+    create.add_argument("--token-limit", type=int)
+    create.add_argument("--agent-role", choices=("implementation", "research", "review"))
+    create.add_argument("--may-delegate", action="store_true")
+    create.add_argument("--allow-missing-mcp", action="store_true")
+    create.add_argument("--no-reasoning-downgrade", action="store_true")
     _set_handler(create, create_command, "project")
     show_task = tasks.add_parser("show")
     show_task.add_argument("name")
@@ -404,6 +525,10 @@ def build_parser() -> argparse.ArgumentParser:
     review_task = tasks.add_parser("review")
     review_task.add_argument("name")
     _set_handler(review_task, task_review_command, "project")
+    run_task = tasks.add_parser("run")
+    run_task.add_argument("name")
+    run_task.add_argument("--codex-bin", default="codex")
+    _set_handler(run_task, task_run_command, "project")
     validate = tasks.add_parser("validate")
     validate.add_argument("name")
     validate.add_argument(
@@ -454,6 +579,51 @@ def build_parser() -> argparse.ArgumentParser:
     apply = promotion_commands.add_parser("apply")
     apply.add_argument("promotion_id")
     _set_handler(apply, promotion_apply_command, "project")
+
+    decision = commands.add_parser("decision")
+    decision_commands = decision.add_subparsers(dest="decision_command", required=True)
+    request = decision_commands.add_parser("request")
+    request.add_argument("--task", required=True)
+    request.add_argument("--title", required=True)
+    request.add_argument("--reason", required=True)
+    request.add_argument("--option", action="append", required=True)
+    request.add_argument("--recommended", required=True)
+    request.add_argument("--safe-default")
+    request.add_argument("--deferrable", action=argparse.BooleanOptionalAction, default=True)
+    _set_handler(request, decision_request_command, "project")
+    decision_show = decision_commands.add_parser("show")
+    decision_show.add_argument("decision_id")
+    _set_handler(decision_show, decision_show_command, "project")
+    resolve = decision_commands.add_parser("resolve")
+    resolve.add_argument("decision_id")
+    resolve.add_argument("--choice", required=True)
+    resolve.add_argument("--actor", required=True)
+    resolve.add_argument("--note", default="")
+    _set_handler(resolve, decision_resolve_command, "project")
+
+    result = commands.add_parser("result")
+    result_commands = result.add_subparsers(dest="result_command", required=True)
+    add = result_commands.add_parser("add")
+    add.add_argument("result_id")
+    add.add_argument("--kind", choices=("experiment", "failure", "review", "decision", "asset"), required=True)
+    add.add_argument("--summary", required=True)
+    add.add_argument("--source-ref", action="append")
+    add.add_argument("--artifact-ref", action="append")
+    add.add_argument("--verification-status", choices=("unverified", "reviewed", "verified", "rejected"), required=True)
+    add.add_argument("--reusable", action=argparse.BooleanOptionalAction, default=False)
+    add.add_argument("--supersedes")
+    _set_handler(add, result_add_command, "project")
+    result_list = result_commands.add_parser("list")
+    _set_handler(result_list, result_list_command, "project")
+    result_show = result_commands.add_parser("show")
+    result_show.add_argument("result_id")
+    _set_handler(result_show, result_show_command, "project")
+
+    doctor = commands.add_parser("doctor")
+    doctor_commands = doctor.add_subparsers(dest="doctor_command", required=True)
+    codex_doctor = doctor_commands.add_parser("codex")
+    codex_doctor.add_argument("--codex-bin", default="codex")
+    _set_handler(codex_doctor, doctor_codex_command, "project")
 
     observe = commands.add_parser("observe")
     observe_commands = observe.add_subparsers(dest="observe_command", required=True)

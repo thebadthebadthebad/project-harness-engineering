@@ -56,6 +56,53 @@ python3 tools/projectctl.py promotion apply <promotion-id>
 
 `approve`는 표시된 exact diff와 validation evidence에만 유효하다. 승인 후 diff가 바뀌거나 official worktree가 dirty이면 `apply`가 중단된다.
 
+## Codex adapter 실행
+
+먼저 현재 CLI capability를 확인한다.
+
+```bash
+python3 tools/projectctl.py doctor codex
+```
+
+Codex Task 생성 시 실행 계약을 함께 기록한다.
+
+```bash
+python3 tools/projectctl.py task create agent-one --goal "Implement one change" \
+  --scope "Only the named module" --output src/change.py --acceptance "Tests pass" \
+  --owned-path task-output --validation-command "python3 -m unittest" --codex \
+  --model gpt-5.6 --reasoning-effort high --reasoning-fallback medium \
+  --sandbox workspace-write --approval-policy never --web-mode disabled \
+  --no-network-access --allowed-tool shell --allowed-tool apply_patch \
+  --time-limit 3600 --token-limit 200000 --agent-role implementation
+git add .harness && git commit -m "task: create agent-one"
+python3 tools/projectctl.py task start agent-one
+python3 tools/projectctl.py task run agent-one
+```
+
+Reasoning fallback은 adapter가 지원값을 고른 뒤 실제 `-c model_reasoning_effort=...`로 전달한다. 요청값, 적용값, fallback, argv, thread id, JSONL events와 usage는 Git-local run evidence에 기록된다. Sandbox·approval·web·network와 발견된 Project skill·MCP 설정은 CLI config로 제어하지만 shell 하위 동작의 allowlist를 강한 보안 경계로 간주하지 않는다.
+
+## Decision과 Result 재사용
+
+Task가 `needs_decision`이면 해당 Task만 기다린다.
+
+```bash
+python3 tools/projectctl.py decision show <decision-id>
+python3 tools/projectctl.py decision resolve <decision-id> \
+  --choice <option-id> --actor <user-id> --note "Reason"
+```
+
+이전 결과는 검증 상태와 함께 최소 index에 추가한다.
+
+```bash
+python3 tools/projectctl.py result add parser-experiment --kind experiment \
+  --summary "Parser fixture passed" --source-ref task:parser-research \
+  --artifact-ref docs/parser-result.md --verification-status verified --reusable
+python3 tools/projectctl.py result list
+python3 tools/projectctl.py result show parser-experiment
+```
+
+후속 Task 생성 시 `--context-ref result:parser-experiment`를 사용하면 adapter가 digest와 필요한 요약만 context에 넣는다.
+
 이 가이드는 공용 템플릿으로 새 Project를 만들고, 사람이 Project 세션과 Task 세션을 전환하면서 독립 작업 결과를 공식 Project로 Promotion하는 전체 절차를 설명한다.
 
 ## 운영 모델
