@@ -1,4 +1,4 @@
-.harness/
 __pycache__/
 *.py[cod]
 .venv/
+.harness/observability/

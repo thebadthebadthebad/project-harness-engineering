@@ -1,5 +1,61 @@
 # Project/Task 하네스 운영 가이드
 
+## 공용 하네스 설치와 업데이트
+
+Harness Engineering 저장소에서 versioned bundle을 만든 뒤 대상 Project에 적용한다. 대상 Project는 중앙 registry에 등록되지 않는다.
+
+```bash
+python3 tools/harnessctl.py package --template project --version 2.0.0-a1 --output /tmp/harness-2.0.0-a1
+python3 tools/harnessctl.py new ../my-project --source /tmp/harness-2.0.0-a1 \
+  --project-id my-project --goal "Project goal" --scope "Initial scope"
+python3 tools/harnessctl.py apply ../existing-project --source /tmp/harness-2.0.0-a1
+python3 tools/harnessctl.py apply ../existing-project --source /tmp/harness-2.0.0-a1 --apply
+python3 tools/harnessctl.py update ../existing-project --source /tmp/harness-2.0.0-a1
+python3 tools/harnessctl.py update ../existing-project --source /tmp/harness-2.0.0-a1 --apply
+```
+
+`apply`와 `update`는 기본적으로 dry-run이다. update는 설치 당시 checksum과 현재 파일, 새 bundle을 비교하며 양쪽이 바뀐 managed 파일에서는 중단한다. 반영 뒤 `projectctl check`가 실패하면 건드린 파일과 install metadata를 복구한다. Project의 제품 코드·데이터·README와 기존 AGENTS 통합 내용은 덮어쓰지 않는다.
+
+## Legacy 상태를 v2로 전환
+
+기존 Project는 legacy와 v2를 동시에 쓰지 않고 다음 명시적 단계로 전환한다.
+
+```bash
+python3 tools/projectctl.py migrate inspect
+python3 tools/projectctl.py migrate plan
+python3 tools/projectctl.py migrate apply legacy-to-v2
+python3 tools/projectctl.py migrate verify legacy-to-v2
+python3 tools/projectctl.py migrate switch legacy-to-v2 --harness-version 2.0.0-a1
+python3 tools/projectctl.py show project
+```
+
+`apply`는 side-by-side candidate만 만들고, `verify`의 normalized semantic parity가 100%일 때만 `switch`가 가능하다. v2 mutation 전에는 `migrate rollback legacy-to-v2`로 authority를 되돌릴 수 있다. 기존 문서는 파일럿·보존 기간·복구 훈련이 끝날 때까지 삭제하지 않는다.
+
+## 수동 v2 Task와 Promotion
+
+```bash
+python3 tools/projectctl.py task create build-one --goal "Build one" \
+  --scope "One bounded change" --output src/result.py --acceptance "Tests pass" \
+  --owned-path task-output --owned-path handoff.json \
+  --validation-command "python3 -m unittest"
+git add .harness && git commit -m "task: create build-one"
+python3 tools/projectctl.py task start build-one
+```
+
+출력된 worktree에서 작업한 뒤 `handoff.json`에 `status`, `summary`, `findings`, `limitations`, 그리고 `id/source/target/rationale` 후보 목록을 작성한다. Project root에서 다음을 실행한다.
+
+```bash
+python3 tools/projectctl.py task submit build-one --handoff handoff.json
+python3 tools/projectctl.py task review build-one
+git add .harness && git commit -m "task: review build-one"
+python3 tools/projectctl.py promotion prepare --task build-one --candidate <candidate-id>
+python3 tools/projectctl.py promotion show <promotion-id>
+python3 tools/projectctl.py promotion approve <promotion-id> --actor <user-id>
+python3 tools/projectctl.py promotion apply <promotion-id>
+```
+
+`approve`는 표시된 exact diff와 validation evidence에만 유효하다. 승인 후 diff가 바뀌거나 official worktree가 dirty이면 `apply`가 중단된다.
+
 이 가이드는 공용 템플릿으로 새 Project를 만들고, 사람이 Project 세션과 Task 세션을 전환하면서 독립 작업 결과를 공식 Project로 Promotion하는 전체 절차를 설명한다.
 
 ## 운영 모델

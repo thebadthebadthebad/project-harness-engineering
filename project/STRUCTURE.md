@@ -2,6 +2,13 @@
 
 이 문서는 Project와 Task의 관계, 디렉터리 책임, Task 생성·완료·Promotion 절차를 설명한다.
 
+## Authority and Distribution
+
+- 각 적용 Project는 자신의 `.harness` 상태와 Git 이력을 독립적으로 소유한다. Harness Engineering 저장소는 bundle 원본·버전만 배포하며 적용 Project를 검색하거나 등록하지 않는다.
+- `.harness/install.json`의 `authority`가 `legacy`이면 기존 Markdown lifecycle이 원본이다. `v2`이면 sealed JSON record가 원본이고 `projectctl show`가 읽기 쉬운 Markdown View를 생성한다.
+- 공용 bundle의 `managed` 파일은 checksum 기반으로 갱신한다. `bootstrap` 파일은 없을 때만 만들고, `integration` 파일은 기존 사용자 내용을 보존한다.
+- root distribution의 `harnessctl`은 `package|new|apply|update`를 담당한다. 적용 뒤 각 Project의 로컬 `tools/projectctl.py`가 상태와 Task를 담당하므로 중앙 설치에 실행 의존하지 않는다.
+
 ## Document Roles
 
 - `PROJECT.md`: 프로젝트의 안정적인 Goal과 Scope
@@ -39,6 +46,21 @@ Task 내부 디렉터리는 다음 책임을 가진다.
 - 현재 환경에서는 Project write를 sandbox로 막지 않는다.
 - Task 시작 전 Git 기준점과 linked data checksum을 저장하고 종료 후 예상 외 변경을 감사한다.
 - 감사는 우발적 변경 감지 장치이며 악의적 변경을 막는 보안 경계가 아니다.
+
+v2의 수동 Stage A 흐름은 다음과 같다.
+
+```text
+Task JSON 생성·commit
+  → task start가 Task branch/worktree 생성
+  → owned path 안에서 작업하고 typed handoff 작성
+  → task submit이 ownership과 validation 검사
+  → parent Agent가 handoff/candidate 검토
+  → promotion prepare가 선택 후보만 integration worktree에 배치
+  → 사용자가 exact diff·validation packet 승인
+  → approval digest가 여전히 같을 때만 official branch에 반영
+```
+
+Task worktree와 integration worktree는 자동 삭제하지 않는다. Validation 실패, 후보 밖 변경, 승인 후 diff 변경, dirty official worktree는 반영을 차단한다.
 
 Project와 Task 세션은 사용자 shell에서 다음 명령으로 시작한다.
 
@@ -113,6 +135,8 @@ stopped는 STATE에서 제거하고 stopped History 기록
 Task completed는 handoff 검토 가능 시점을 결정한다. Promotion 시작 조건은 아니며 Promotion은 사용자가 결과 가치를 판단한 뒤 수행한다.
 
 ## Promotion
+
+이 절의 기존 `promotion record` 흐름은 legacy authority에 적용된다. v2에서는 `promotion prepare|show|approve|apply`가 선택 후보, base commit, diff digest와 validation digest를 하나의 승인 대상으로 묶는다. 안전하고 위임된 여러 변경은 한 packet에 묶을 수 있지만 packet 밖 파일이나 승인 후 변경은 새 승인이 필요하다.
 
 ```text
 사용자가 Promotion 요청

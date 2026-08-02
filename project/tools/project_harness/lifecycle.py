@@ -601,8 +601,21 @@ def check_project(root: Path) -> list[str]:
             if not depth or int(depth.group(1)) != 1:
                 errors.append(".codex/config.toml: max_depth must be 1")
         ignore = root / ".gitignore"
-        if not ignore.is_file() or ".harness/" not in ignore.read_text().splitlines():
-            errors.append(".gitignore must contain .harness/")
+        ignored = ignore.read_text().splitlines() if ignore.is_file() else []
+        install = root / ".harness/install.json"
+        authority = None
+        if install.is_file():
+            try:
+                authority = json.loads(install.read_text()).get("authority")
+            except (json.JSONDecodeError, AttributeError):
+                errors.append(".harness/install.json: invalid installation metadata")
+        if authority == "v2":
+            if ".harness/" in ignored:
+                errors.append(".gitignore must not hide canonical .harness records")
+            if ".harness/observability/" not in ignored:
+                errors.append(".gitignore must contain .harness/observability/")
+        elif not ({".harness/", ".harness/observability/"} & set(ignored)):
+            errors.append(".gitignore must exclude harness runtime observations")
     for skill_root in (root / ".agents/skills", template / ".agents/skills"):
         if not skill_root.is_dir():
             continue
