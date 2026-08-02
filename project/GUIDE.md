@@ -70,7 +70,8 @@ Codex Task 생성 시 실행 계약을 함께 기록한다.
 
 ```bash
 python3 tools/projectctl.py task create agent-one --goal "Implement one change" \
-  --scope "Only the named module" --output src/change.py --acceptance "Tests pass" \
+  --scope "Only the named module" --input src/existing.py \
+  --output src/change.py --acceptance "Tests pass" \
   --owned-path task-output --validation-command "python3 -m unittest" --codex \
   --model gpt-5.6 --reasoning-effort high --reasoning-fallback medium \
   --sandbox workspace-write --approval-policy never --web-mode disabled \
@@ -82,6 +83,8 @@ python3 tools/projectctl.py task run agent-one
 ```
 
 Reasoning fallback은 adapter가 지원값을 고른 뒤 실제 `-c model_reasoning_effort=...`로 전달한다. 요청값, 적용값, fallback, argv, thread id, JSONL events와 usage는 Git-local run evidence에 기록된다. Sandbox·approval·web·network와 발견된 Project skill·MCP 설정은 CLI config로 제어하지만 shell 하위 동작의 allowlist를 강한 보안 경계로 간주하지 않는다.
+
+`--input`은 Project-relative UTF-8 file만 받는다. 기본 제한은 파일당 128 KiB, Task 전체 256 KiB이며 content는 bounded prompt에, path·SHA-256·bytes는 Task와 run evidence에 기록된다. Task 생성 뒤 input이 바뀌면 실행을 차단하므로 변경된 source에는 새 계약이 필요하다. Directory, binary, traversal과 제한 초과 입력은 허용하지 않는다.
 
 ## Decision과 Result 재사용
 
