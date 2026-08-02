@@ -215,10 +215,13 @@ def _plan_install(root: Path, manifest: dict[str, Any], update: bool) -> dict[st
     }
 
 
-def _run_check(root: Path) -> None:
+def _run_check(root: Path, installation_only: bool = False) -> None:
     """Run the installed Project's deterministic structural check."""
     result = subprocess.run(
-        (sys.executable, "tools/projectctl.py", "--root", str(root), "check"),
+        (
+            sys.executable, "tools/projectctl.py", "--root", str(root), "check",
+            *(("--installation-only",) if installation_only else ()),
+        ),
         cwd=root,
         text=True,
         capture_output=True,
@@ -289,7 +292,8 @@ def install(
             install_target,
             _install_metadata(root, manifest, previous_install, initial_authority),
         )
-        _run_check(root)
+        installed_authority = previous_install.get("authority", initial_authority)
+        _run_check(root, installation_only=installed_authority != "v2")
     except Exception:
         for item in touched:
             relative = safe_relative(item["path"])

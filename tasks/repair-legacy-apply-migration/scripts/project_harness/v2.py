@@ -15,7 +15,7 @@ from typing import Any, Iterable, Sequence
 from .context import report_condition
 from .documents import atomic_write_text, markdown_table, scalar, section
 from .errors import HarnessError
-from .lifecycle import current_task_states, report_handoff
+from .lifecycle import report_handoff
 from .repository import git_dir, run_command, safe_relative
 
 
@@ -212,7 +212,12 @@ def render_project(root: Path) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
-def _legacy_task(root: Path, name: str, project_status: str | None) -> dict[str, Any]:
+def _legacy_task(
+    root: Path,
+    name: str,
+    project_status: str | None,
+    project_state_extra: Sequence[str],
+) -> dict[str, Any]:
     """Normalize one current-format Task directory."""
     task = root / "tasks" / name
     contract_text = (task / "TASK.md").read_text()
@@ -222,6 +227,7 @@ def _legacy_task(root: Path, name: str, project_status: str | None) -> dict[str,
     return {
         "id": name,
         "project_status": project_status,
+        "project_state_extra": list(project_state_extra),
         "task_status": scalar(status_text, "Status"),
         "final_goal": scalar(status_text, "Final Goal"),
         "current_work": scalar(status_text, "Current Work"),
@@ -238,13 +244,32 @@ def legacy_semantic_model(root: Path) -> dict[str, Any]:
     """Return the normalized meaning of the supported legacy Project format."""
     project = (root / "PROJECT.md").read_text()
     state = (root / "STATE.md").read_text()
-    states = {item["task"]: item["project"] for item in current_task_states(root)}
+    state_entries: dict[str, dict[str, Any]] = {}
+    for row in markdown_table(section(state, "Current Tasks")):
+        if len(row) < 2:
+            raise HarnessError("invalid legacy STATE Current Tasks row")
+        name, project_status, *extra = row
+        if not TASK_ID.fullmatch(name):
+            raise HarnessError("invalid legacy STATE Task name: " + name)
+        if project_status not in {"todo", "doing", "completed"}:
+            raise HarnessError("invalid legacy Project Task status: " + project_status)
+        if name in state_entries:
+            raise HarnessError("duplicate legacy STATE Task: " + name)
+        state_entries[name] = {"project_status": project_status, "extra": extra}
     tasks = []
     for path in sorted((root / "tasks").iterdir()):
         if path.name == "_template" or not path.is_dir():
             continue
         if all((path / name).is_file() for name in ("TASK.md", "STATUS.md", "REPORT.md")):
-            tasks.append(_legacy_task(root, path.name, states.get(path.name)))
+            entry = state_entries.get(path.name, {"project_status": None, "extra": []})
+            tasks.append(
+                _legacy_task(
+                    root,
+                    path.name,
+                    entry["project_status"],
+                    entry["extra"],
+                )
+            )
     histories = []
     for path in sorted((root / "docs/history").glob("*.md")):
         histories.append({"path": path.relative_to(root).as_posix(), "text": path.read_text()})
@@ -290,6 +315,7 @@ def legacy_records(root: Path) -> dict[str, dict[str, Any]]:
             validation_commands=[],
             state={
                 "project_status": task["project_status"],
+                "legacy_state_extra": task["project_state_extra"],
                 "task_status": task["task_status"],
                 "current_work": task["current_work"],
                 "work_plan": task["work_plan"],
@@ -329,6 +355,7 @@ def semantic_model_from_records(records: dict[str, dict[str, Any]]) -> dict[str,
             {
                 "id": record["id"],
                 "project_status": state.get("project_status"),
+                "project_state_extra": state.get("legacy_state_extra", []),
                 "task_status": state.get("task_status"),
                 "final_goal": record["goal"],
                 "current_work": state.get("current_work"),

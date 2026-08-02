@@ -3,7 +3,7 @@
 ## Status
 
 
-doing
+completed
 
 허용값은 `todo`, `doing`, `completed`, `stopped`다.
 
@@ -17,16 +17,16 @@ doing
 
 | Work | Status |
 | --- | --- |
-| 실제 failure fixture 고정 | doing |
-| Installation-only check | todo |
-| Legacy STATE·History normalization | todo |
-| Migration parity 회귀 | todo |
-| 전체 검증과 REPORT | todo |
+| 실제 failure fixture 고정 | completed |
+| Installation-only check | completed |
+| Legacy STATE·History normalization | completed |
+| Migration parity 회귀 | completed |
+| 전체 검증과 REPORT | completed |
 
 Work Status는 `todo`, `doing`, `completed` 중 하나를 사용한다.
 
 ## Current Work
 
-실제 failure fixture 고정
+None
 
 Task가 `completed` 또는 `stopped`이면 `None`으로 작성한다.

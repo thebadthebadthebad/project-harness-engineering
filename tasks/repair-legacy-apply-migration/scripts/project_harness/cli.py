@@ -424,7 +424,7 @@ def close_command(args: argparse.Namespace) -> None:
 
 def check_command(args: argparse.Namespace) -> None:
     """Check deterministic Project structure and naming rules."""
-    errors = check_project(_root(args))
+    errors = check_project(_root(args), installation_only=args.installation_only)
     if args.json:
         _print_json({"ok": not errors, "errors": errors})
     if errors:
@@ -619,6 +619,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     check = commands.add_parser("check")
     check.add_argument("--json", action="store_true")
+    check.add_argument("--installation-only", action="store_true")
     _set_handler(check, check_command, "project")
 
     promotion = commands.add_parser("promotion")
