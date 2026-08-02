@@ -3,7 +3,7 @@
 ## Status
 
 
-doing
+completed
 
 허용값은 `todo`, `doing`, `completed`, `stopped`다.
 
@@ -17,14 +17,14 @@ doing
 
 | Work | Status |
 | --- | --- |
-| PR readiness와 diff hygiene | doing |
-| 원격 branch push | todo |
-| PR 생성과 결과 기록 | todo |
+| PR readiness와 diff hygiene | completed |
+| 원격 branch push | completed |
+| PR 생성과 결과 기록 | completed |
 
 Work Status는 `todo`, `doing`, `completed` 중 하나를 사용한다.
 
 ## Current Work
 
-PR readiness와 diff hygiene
+None
 
 Task가 `completed` 또는 `stopped`이면 `None`으로 작성한다.
