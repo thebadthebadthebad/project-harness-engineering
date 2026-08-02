@@ -477,9 +477,16 @@ def managed_public_template(root: Path) -> Path | None:
     return None
 
 
-def check_project(root: Path) -> list[str]:
+def check_project(root: Path, installation_only: bool = False) -> list[str]:
     """Return deterministic structure, state, naming, and config integrity errors."""
     errors: list[str] = []
+    install = root / ".harness/install.json"
+    authority = None
+    if install.is_file():
+        try:
+            authority = json.loads(install.read_text()).get("authority")
+        except (json.JSONDecodeError, AttributeError):
+            errors.append(".harness/install.json: invalid installation metadata")
     public_template = managed_public_template(root)
     required_files = ("AGENTS.md", "PROJECT.md", "README.md", "STATE.md", "STRUCTURE.md")
     required_directories = (
@@ -520,37 +527,39 @@ def check_project(root: Path) -> list[str]:
                 section(text, heading)
             except HarnessError as error:
                 errors.append(str(path.relative_to(root)) + ": " + str(error))
-    try:
-        rows = state_rows(root)
-        names: set[str] = set()
-        for row in rows:
-            if len(row) != 2:
-                errors.append("invalid STATE Current Tasks row")
-                continue
-            name, status = row
-            try:
-                path = task_path(root, name)
-            except HarnessError as error:
-                errors.append(str(error))
-                continue
-            if name in names:
-                errors.append("duplicate STATE Task: " + name)
-            names.add(name)
-            if status not in PROJECT_STATUSES:
-                errors.append("invalid Project Task status: " + status)
-            if not path.is_dir():
-                errors.append("missing Task directory: tasks/" + name)
-    except HarnessError as error:
-        errors.append(str(error))
-    for path in sorted((root / "docs/adr").glob("*.md")):
-        if not re.fullmatch(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*\.md", path.name):
-            errors.append("invalid ADR filename: " + path.name)
-    history_pattern = re.compile(
-        r"\d{4}-\d{2}-\d{2}-\d{4}-(?:completed|stopped)-[a-z0-9]+(?:-[a-z0-9]+)*\.md"
-    )
-    for path in sorted((root / "docs/history").glob("*.md")):
-        if not history_pattern.fullmatch(path.name):
-            errors.append("invalid History filename: " + path.name)
+    if not installation_only and authority != "v2":
+        try:
+            rows = state_rows(root)
+            names: set[str] = set()
+            for row in rows:
+                if len(row) != 2:
+                    errors.append("invalid STATE Current Tasks row")
+                    continue
+                name, status = row
+                try:
+                    path = task_path(root, name)
+                except HarnessError as error:
+                    errors.append(str(error))
+                    continue
+                if name in names:
+                    errors.append("duplicate STATE Task: " + name)
+                names.add(name)
+                if status not in PROJECT_STATUSES:
+                    errors.append("invalid Project Task status: " + status)
+                if not path.is_dir():
+                    errors.append("missing Task directory: tasks/" + name)
+        except HarnessError as error:
+            errors.append(str(error))
+        history_pattern = re.compile(
+            r"\d{4}-\d{2}-\d{2}-\d{4}-(?:completed|stopped)-[a-z0-9]+(?:-[a-z0-9]+)*\.md"
+        )
+        for path in sorted((root / "docs/history").glob("*.md")):
+            if not history_pattern.fullmatch(path.name):
+                errors.append("invalid History filename: " + path.name)
+    if not installation_only:
+        for path in sorted((root / "docs/adr").glob("*.md")):
+            if not re.fullmatch(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*\.md", path.name):
+                errors.append("invalid ADR filename: " + path.name)
     hooks_config = root / ".codex/hooks.json"
     if hooks_config.exists():
         try:
@@ -602,13 +611,6 @@ def check_project(root: Path) -> list[str]:
                 errors.append(".codex/config.toml: max_depth must be 1")
         ignore = root / ".gitignore"
         ignored = ignore.read_text().splitlines() if ignore.is_file() else []
-        install = root / ".harness/install.json"
-        authority = None
-        if install.is_file():
-            try:
-                authority = json.loads(install.read_text()).get("authority")
-            except (json.JSONDecodeError, AttributeError):
-                errors.append(".harness/install.json: invalid installation metadata")
         if authority == "v2":
             if ".harness/" in ignored:
                 errors.append(".gitignore must not hide canonical .harness records")
@@ -646,5 +648,8 @@ def check_project(root: Path) -> list[str]:
         and public_template.is_dir()
         and (public_template / "tools/projectctl.py").is_file()
     ):
-        errors.extend("project: " + error for error in check_project(public_template))
+        errors.extend(
+            "project: " + error
+            for error in check_project(public_template, installation_only=installation_only)
+        )
     return errors

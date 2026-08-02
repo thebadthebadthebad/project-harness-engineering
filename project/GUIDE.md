@@ -16,6 +16,8 @@ python3 tools/harnessctl.py update ../existing-project --source /tmp/harness-2.0
 
 `apply`와 `update`는 기본적으로 dry-run이다. update는 설치 당시 checksum과 현재 파일, 새 bundle을 비교하며 양쪽이 바뀐 managed 파일에서는 중단한다. 반영 뒤 `projectctl check`가 실패하면 건드린 파일과 install metadata를 복구한다. Project의 제품 코드·데이터·README와 기존 AGENTS 통합 내용은 덮어쓰지 않는다.
 
+Legacy Project의 최초 `apply/update`는 migration 명령 설치에 필요한 구조·managed config만 `check --installation-only`로 검사한다. 구버전 STATE/History 의미는 다음 migration parity 단계에서 검증한다. V2 authority 전환 뒤에는 full `check`가 canonical JSON을 기준으로 동작하며 보존된 legacy 파일의 예전 표 열이나 history 이름을 새 writer 형식으로 오인하지 않는다.
+
 ## Legacy 상태를 v2로 전환
 
 기존 Project는 legacy와 v2를 동시에 쓰지 않고 다음 명시적 단계로 전환한다.
