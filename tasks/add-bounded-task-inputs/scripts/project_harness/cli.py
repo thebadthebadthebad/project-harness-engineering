@@ -213,6 +213,7 @@ def create_command(args: argparse.Namespace) -> None:
             execution,
             args.context_ref or [],
             args.dependency or [],
+            args.input or [],
         )
         _print_json(payload)
         return
@@ -557,6 +558,7 @@ def build_parser() -> argparse.ArgumentParser:
     create.add_argument("--validation-command", action="append")
     create.add_argument("--context-ref", action="append")
     create.add_argument("--dependency", action="append")
+    create.add_argument("--input", action="append")
     create.add_argument("--codex", action="store_true")
     create.add_argument("--model")
     create.add_argument("--reasoning-effort")

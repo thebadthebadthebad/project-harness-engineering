@@ -512,6 +512,7 @@ def create_v2_task(
     execution: dict[str, Any] | None = None,
     context_refs: Sequence[str] = (),
     dependencies: Sequence[str] = (),
+    inputs: Sequence[str] = (),
 ) -> dict[str, Any]:
     """Create one ready v2 Task contract."""
     require_v2(root)
@@ -522,6 +523,32 @@ def create_v2_task(
         raise HarnessError("Task already exists")
     for raw in owned_write_paths:
         safe_relative(raw)
+    input_records = []
+    total_input_bytes = 0
+    for raw in inputs:
+        relative = safe_relative(raw)
+        source = root / relative
+        if not source.is_file():
+            raise HarnessError("Task input file does not exist: " + raw)
+        data = source.read_bytes()
+        if len(data) > 131072:
+            raise HarnessError("Task input exceeds default file limit: " + raw)
+        total_input_bytes += len(data)
+        if total_input_bytes > 262144:
+            raise HarnessError("Task inputs exceed default total limit")
+        if b"\x00" in data:
+            raise HarnessError("binary Task input is unsupported: " + raw)
+        try:
+            data.decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise HarnessError("Task input must be UTF-8: " + raw) from error
+        input_records.append(
+            {
+                "path": relative.as_posix(),
+                "sha256": hashlib.sha256(data).hexdigest(),
+                "bytes": len(data),
+            }
+        )
     owned_paths = list(owned_write_paths)
     if execution is not None and ".harness-agent-handoff.json" not in owned_paths:
         owned_paths.append(".harness-agent-handoff.json")
@@ -531,7 +558,7 @@ def create_v2_task(
         objective_id="current",
         goal=goal,
         scope=scope,
-        inputs=[],
+        inputs=input_records,
         outputs=list(outputs),
         acceptance=list(acceptance),
         dependencies=list(dependencies),

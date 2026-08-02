@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -171,6 +172,7 @@ def _default_contract() -> dict[str, Any]:
         "allowed_mcp": [],
         "allowed_skills": [],
         "limits": {"seconds": 3600, "tokens": None},
+        "context_limits": {"file_bytes": 131072, "total_bytes": 262144},
         "fallback": {"allow_missing_mcp": False, "allow_reasoning_downgrade": True},
         "agent": {
             "role": "implementation",
@@ -193,7 +195,7 @@ def normalize_contract(
     """Validate a Task contract and apply only explicit safe fallbacks."""
     contract = _default_contract()
     for key, value in (raw or {}).items():
-        if key in {"limits", "fallback", "agent"} and isinstance(value, dict):
+        if key in {"limits", "context_limits", "fallback", "agent"} and isinstance(value, dict):
             contract[key].update(value)
         else:
             contract[key] = value
@@ -230,6 +232,12 @@ def normalize_contract(
         raise HarnessError("execution seconds limit must be a positive integer")
     if tokens is not None and (not isinstance(tokens, int) or tokens < 1):
         raise HarnessError("execution token limit must be null or a positive integer")
+    for key in ("file_bytes", "total_bytes"):
+        value = contract["context_limits"].get(key)
+        if not isinstance(value, int) or value < 1:
+            raise HarnessError("context " + key + " limit must be a positive integer")
+    if contract["context_limits"]["file_bytes"] > contract["context_limits"]["total_bytes"]:
+        raise HarnessError("context file limit cannot exceed total limit")
     if contract["agent"].get("may_delegate") and "multi_agent" not in contract["allowed_tools"]:
         raise HarnessError("delegation requires multi_agent in allowed_tools")
     installed_mcp = set(capabilities.get("mcp_servers", []))
@@ -336,7 +344,55 @@ def _load_context_reference(root: Path, reference: str) -> dict[str, Any]:
     }
 
 
-def build_prompt(root: Path, task: dict[str, Any], contract: dict[str, Any]) -> str:
+def load_input_context(
+    workspace: Path,
+    task: dict[str, Any],
+    contract: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Load only declared UTF-8 input files under strict byte and digest limits."""
+    loaded = []
+    total = 0
+    for item in task.get("inputs", []):
+        if not isinstance(item, dict) or not item.get("path") or not item.get("sha256"):
+            raise HarnessError("Task input record is malformed")
+        relative = Path(str(item["path"]))
+        if relative.is_absolute() or ".." in relative.parts:
+            raise HarnessError("Task input path is unsafe")
+        source = workspace / relative
+        if not source.is_file():
+            raise HarnessError("Task input file is missing: " + relative.as_posix())
+        data = source.read_bytes()
+        if len(data) > contract["context_limits"]["file_bytes"]:
+            raise HarnessError("Task input exceeds file context limit: " + relative.as_posix())
+        total += len(data)
+        if total > contract["context_limits"]["total_bytes"]:
+            raise HarnessError("Task inputs exceed total context limit")
+        digest = hashlib.sha256(data).hexdigest()
+        if digest != item["sha256"] or len(data) != item.get("bytes"):
+            raise HarnessError("Task input changed after contract creation: " + relative.as_posix())
+        if b"\x00" in data:
+            raise HarnessError("binary Task input is unsupported: " + relative.as_posix())
+        try:
+            content = data.decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise HarnessError("Task input must be UTF-8: " + relative.as_posix()) from error
+        loaded.append(
+            {
+                "path": relative.as_posix(),
+                "sha256": digest,
+                "bytes": len(data),
+                "content": content,
+            }
+        )
+    return loaded
+
+
+def build_prompt(
+    root: Path,
+    task: dict[str, Any],
+    contract: dict[str, Any],
+    input_context: list[dict[str, Any]] | None = None,
+) -> str:
     """Build bounded Task context and the structured handoff contract."""
     project = read_json(root / ".harness/project.json")
     references = [_load_context_reference(root, item) for item in task.get("context_refs", [])]
@@ -345,7 +401,7 @@ def build_prompt(root: Path, task: dict[str, Any], contract: dict[str, Any]) -> 
         "task_id": task["id"],
         "task_goal": task["goal"],
         "scope": task["scope"],
-        "inputs": task.get("inputs", []),
+        "inputs": input_context if input_context is not None else task.get("inputs", []),
         "outputs": task.get("outputs", []),
         "acceptance": task.get("acceptance", []),
         "owned_write_paths": task.get("owned_write_paths", []),
@@ -468,7 +524,13 @@ def execute_task(
         schema_path,
         final_path,
     )
-    prompt = build_prompt(root, task, contract)
+    try:
+        input_context = load_input_context(Path(workspace["workspace"]), task, contract)
+    except HarnessError as error:
+        with canonical_state_lock(root):
+            _set_task_state(root, task_id, "blocked", blocked_reason=str(error))
+        return {"status": "blocked", "reason": str(error), "evidence": None}
+    prompt = build_prompt(root, task, contract, input_context)
     process, timed_out, cancelled = _run_codex(
         argv,
         prompt,
@@ -493,6 +555,10 @@ def execute_task(
         "effective_contract": contract,
         "fallbacks": fallbacks,
         "capabilities": capabilities,
+        "inputs": [
+            {key: value for key, value in item.items() if key != "content"}
+            for item in input_context
+        ],
         "argv": argv,
         "exit_code": process.returncode,
         "timed_out": timed_out,

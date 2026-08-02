@@ -3,7 +3,7 @@
 ## Status
 
 
-doing
+completed
 
 허용값은 `todo`, `doing`, `completed`, `stopped`다.
 
@@ -17,16 +17,16 @@ v2 Task input 파일을 명시적으로 계약하고 Codex adapter가 검증된 
 
 | Work | Status |
 | --- | --- |
-| Input 계약과 CLI | doing |
-| Bounded context loader | todo |
-| Digest drift gate | todo |
-| Focused·전체 회귀 | todo |
-| REPORT 정리 | todo |
+| Input 계약과 CLI | completed |
+| Bounded context loader | completed |
+| Digest drift gate | completed |
+| Focused·전체 회귀 | completed |
+| REPORT 정리 | completed |
 
 Work Status는 `todo`, `doing`, `completed` 중 하나를 사용한다.
 
 ## Current Work
 
-Input 계약과 CLI
+None
 
 Task가 `completed` 또는 `stopped`이면 `None`으로 작성한다.
