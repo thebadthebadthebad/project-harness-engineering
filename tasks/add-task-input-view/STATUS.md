@@ -3,7 +3,7 @@
 ## Status
 
 
-completed
+doing
 
 허용값은 `todo`, `doing`, `completed`, `stopped`다.
 
@@ -19,12 +19,12 @@ Task show에서 bounded input의 경로, 크기와 digest를 사람이 검토할
 | --- | --- |
 | Task View 렌더링 보정 | completed |
 | bounded-input 회귀 테스트 | completed |
-| 전체 회귀와 공식 반영 | completed |
+| 전체 회귀와 공식 반영 | doing |
 
 Work Status는 `todo`, `doing`, `completed` 중 하나를 사용한다.
 
 ## Current Work
 
-None
+전체 회귀와 공식 반영
 
 Task가 `completed` 또는 `stopped`이면 `None`으로 작성한다.
