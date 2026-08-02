@@ -2,4 +2,5 @@
 
 - Task: tasks/add-bounded-task-inputs
 - Report: tasks/add-bounded-task-inputs/REPORT.md
-- Promotion: not evaluated
+- Promotion: promoted
+- Official paths: project/tools/project_harness, project/GUIDE.md, tests/test_bounded_inputs.py
