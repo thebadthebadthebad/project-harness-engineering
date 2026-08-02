@@ -10,6 +10,9 @@
 - v2 Task는 `task create|show|start|submit|review`로, exact-diff 반영은 `promotion prepare|show|approve|apply`로 수행한다. Legacy authority에서만 기존 `activate|baseline|audit|close`와 `promotion record`를 사용한다.
 - Codex 실행 계약이 있는 v2 Task는 `task run`으로 실행한다. 요청·실제 model/reasoning/sandbox/approval/web·network/tool·MCP·skill/budget/fallback을 run evidence에 남기며 추가 권한·외부 변경·범위 확대를 자동 승인하지 않는다.
 - `needs_decision` Task만 정지시키고 `decision show|resolve`로 사용자가 명시적으로 선택할 때 재개한다. 다른 독립 Task의 상태는 변경하지 않는다.
+- Background Task는 Git-local `queue`와 단일 `worker` coordinator로 실행한다. 기본 total parallel은 2, writer parallel은 1이며 더 높은 writer 병렬성은 격리·검증 근거가 있을 때만 명시한다.
+- Worker가 시작될 때 남은 `running` job은 `interrupted`로 바꾸고 자동 재시도하지 않는다. 사용자가 상태와 잔존 프로세스를 확인한 뒤 `queue resume`을 명시해야 한다.
+- Queue job의 `succeeded`는 review 가능한 handoff가 생겼다는 뜻이지 공식 반영이나 품질 승인이 아니다. Parent Agent와 사용자의 Promotion 책임은 유지된다.
 - 검증된 실험·실패·리뷰·결정·재사용 자산만 `result add`로 색인하고 후속 Task는 stable `kind:id` context reference를 사용한다.
 - v2 Task 결과는 지정된 별도 Git worktree와 `owned_write_paths` 안에서만 작성한다. 공식 Project 변경은 parent Agent가 handoff와 validation을 검토하고 사용자가 승인한 Promotion packet으로만 수행한다.
 - `.harness`의 canonical JSON은 Git에 추적한다. Git-local runtime, Task·integration worktree와 승인 전 packet은 공식 지식이 아니며 provenance 확인 없이 자동 삭제하지 않는다.

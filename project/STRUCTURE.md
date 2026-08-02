@@ -78,6 +78,20 @@ Task worktree와 integration worktree는 자동 삭제하지 않는다. Validati
 
 Stage B에서는 active Task를 `task run`으로 Codex adapter에 넘길 수 있다. Adapter는 Project goal, Task contract, 검증된 context references와 Agent 역할만 bounded prompt로 구성한다. 최종 출력은 `completed`, `needs_decision`, `blocked` 중 하나이며, completed handoff도 parent review 뒤에만 Promotion 후보가 된다.
 
+Stage C의 queue는 `.git/harness/v2/queue.sqlite3`에 현재 job 상태만 저장한다. 한 Project에 하나의 coordinator가 기본 total 2, writer 1로 Task를 scheduling한다. Codex subprocess 실행은 병렬이지만 canonical JSON mutation은 짧은 local file lock으로 직렬화한다. SQLite는 공식 Project 지식, 중앙 registry, append-only ledger 또는 distributed scheduler가 아니다.
+
+```text
+ready Task + committed contract
+  → queue enqueue
+  → worker가 dependency와 reader/writer capacity 확인
+  → worktree 생성 후 Codex adapter 병렬 실행
+  → succeeded | needs_decision | blocked | cancelled
+  → parent review와 canonical state commit
+  → 선택 후보의 exact-diff Promotion
+```
+
+Queued job은 즉시 취소할 수 있고 running job은 cooperative cancel request로 Codex subprocess를 종료한다. Worker 재시작 시 남은 running row는 interrupted가 되며 자동 retry하지 않는다. `queue resume`은 사용자가 pending Decision, 잔존 프로세스와 worktree 상태를 확인한 뒤에만 사용한다. Lease, heartbeat, PID adoption, orphan 자동 복구와 mutation retry는 필요성이 입증될 때의 Stage E 후보다.
+
 권한·외부 변경·범위 확대가 필요하면 해당 Task에 pending Decision record를 만들고 `needs_decision`으로 바꾼다. Decision View는 이유, 선택지, 권고, 각 영향, safe default와 보류 가능성을 보여준다. Explicit resolve는 그 Task만 active 또는 blocked로 전환한다.
 
 Result index는 범용 graph가 아니다. `experiment|failure|review|decision|asset`의 짧은 요약, source/artifact refs, 검증 상태, 재사용 여부와 supersedes만 보존하며 후속 Task는 `result:<id>`처럼 참조한다.

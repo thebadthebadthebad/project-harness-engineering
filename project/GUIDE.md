@@ -103,6 +103,37 @@ python3 tools/projectctl.py result show parser-experiment
 
 후속 Task 생성 시 `--context-ref result:parser-experiment`를 사용하면 adapter가 digest와 필요한 요약만 context에 넣는다.
 
+## Queue와 background worker
+
+Codex 실행 계약을 가진 ready Task를 commit한 뒤 queue에 넣는다.
+
+```bash
+python3 tools/projectctl.py queue enqueue task-one
+python3 tools/projectctl.py queue enqueue task-two
+python3 tools/projectctl.py queue list
+python3 tools/projectctl.py worker start --max-parallel 2 --max-writers 1
+```
+
+`worker start`는 detached coordinator를 시작하고 Git-local log 경로를 반환하지만 PID를 영구 상태로 저장하거나 다음 worker가 adopt하지 않는다. Foreground 또는 1회 실행은 다음과 같다.
+
+```bash
+python3 tools/projectctl.py worker run --max-parallel 2 --max-writers 1
+python3 tools/projectctl.py worker run --once
+python3 tools/projectctl.py worker stop
+```
+
+상태 확인과 개별 제어:
+
+```bash
+python3 tools/projectctl.py queue status task-one
+python3 tools/projectctl.py queue cancel task-one
+python3 tools/projectctl.py queue resume task-one
+```
+
+Running cancel은 adapter가 주기적으로 queue flag를 확인해 Codex subprocess를 종료한다. Worker가 비정상 종료되면 다음 시작에서 이전 running을 interrupted로 표시할 뿐 자동 복구하지 않는다. 잔존 Codex 프로세스, worktree diff와 Decision을 확인하기 전에는 resume하지 않는다. 한 Task가 `needs_decision` 또는 `blocked`여도 독립 Task는 계속 실행한다.
+
+Queue 작업 후 `.harness` canonical 변경을 parent Agent가 검토하고 commit해야 한다. Queue의 `succeeded`는 handoff 회수 성공이며 Promotion 승인이 아니다.
+
 이 가이드는 공용 템플릿으로 새 Project를 만들고, 사람이 Project 세션과 Task 세션을 전환하면서 독립 작업 결과를 공식 Project로 Promotion하는 전체 절차를 설명한다.
 
 ## 운영 모델

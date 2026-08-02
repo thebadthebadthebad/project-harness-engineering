@@ -484,6 +484,7 @@ def create_v2_task(
     validation_commands: Sequence[Sequence[str]],
     execution: dict[str, Any] | None = None,
     context_refs: Sequence[str] = (),
+    dependencies: Sequence[str] = (),
 ) -> dict[str, Any]:
     """Create one ready v2 Task contract."""
     require_v2(root)
@@ -506,7 +507,7 @@ def create_v2_task(
         inputs=[],
         outputs=list(outputs),
         acceptance=list(acceptance),
-        dependencies=[],
+        dependencies=list(dependencies),
         context_refs=list(context_refs),
         owned_write_paths=owned_paths,
         validation_commands=[list(item) for item in validation_commands],
@@ -588,13 +589,19 @@ def read_workspace(root: Path, task_id: str) -> dict[str, Any]:
     return read_json(_workspace_metadata_path(root, task_id))
 
 
-def start_v2_task(root: Path, task_id: str) -> dict[str, Any]:
+def start_v2_task(
+    root: Path,
+    task_id: str,
+    allow_dirty_harness: bool = False,
+) -> dict[str, Any]:
     """Create one isolated Task branch and worktree."""
     require_v2(root)
     task = read_task(root, task_id)
     if task["state"]["task_status"] != "ready":
         raise HarnessError("Task must be ready")
-    if run_command(root, ("git", "status", "--porcelain", "--", ".harness")):
+    if not allow_dirty_harness and run_command(
+        root, ("git", "status", "--porcelain", "--", ".harness")
+    ):
         raise HarnessError("canonical .harness records must be committed before Task start")
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ-") + uuid.uuid4().hex[:8]
     branch = "harness/task/" + task_id + "/" + run_id

@@ -13,6 +13,7 @@ Run only the Project checkpoint the user explicitly requested.
    - View: `show project`, `task show <name>`, `task review <name>`.
    - Task: `task create|start|run|submit` with the explicit contract and worktree handoff.
    - Decisions and reusable results: `decision show|resolve`, `result add|list|show` only for an explicit user choice or reviewed result.
+   - Background work: `queue enqueue|list|status|cancel|resume` and `worker run|start|stop`; never auto-resume `interrupted` work.
    - Promotion: `promotion prepare|show|approve|apply`; approval applies only to the displayed exact diff and validation digest.
 4. Under legacy authority, use `projectctl check`, `task validate`, `task status`, or `task handoff` for deterministic checks instead of manually scanning every Markdown file.
    - Status: `python3 tools/projectctl.py task status [--json]` takes no Task name.

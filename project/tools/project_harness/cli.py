@@ -31,6 +31,16 @@ from .lifecycle import (
 from .observability import list_runs, record_event, write_report
 from .repository import find_project_root, task_path
 from .adapter import capability_probe, execute_task
+from .queueing import (
+    cancel_job,
+    enqueue,
+    get_job,
+    list_jobs,
+    request_worker_stop,
+    resume_job,
+    run_worker,
+    start_background_worker,
+)
 from .v2 import (
     add_result,
     apply_promotion,
@@ -202,6 +212,7 @@ def create_command(args: argparse.Namespace) -> None:
             commands,
             execution,
             args.context_ref or [],
+            args.dependency or [],
         )
         _print_json(payload)
         return
@@ -288,6 +299,57 @@ def result_list_command(args: argparse.Namespace) -> None:
 def result_show_command(args: argparse.Namespace) -> None:
     """Render one indexed result."""
     print(render_result(_root(args), args.result_id), end="")
+
+
+def queue_enqueue_command(args: argparse.Namespace) -> None:
+    """Enqueue one ready Codex Task."""
+    _print_json(enqueue(_root(args), args.name))
+
+
+def queue_list_command(args: argparse.Namespace) -> None:
+    """List current Git-local queue states."""
+    _print_json(list_jobs(_root(args), args.state))
+
+
+def queue_status_command(args: argparse.Namespace) -> None:
+    """Show one current queue job."""
+    _print_json(get_job(_root(args), args.name))
+
+
+def queue_cancel_command(args: argparse.Namespace) -> None:
+    """Cancel queued work or request cancellation of a running turn."""
+    _print_json(cancel_job(_root(args), args.name))
+
+
+def queue_resume_command(args: argparse.Namespace) -> None:
+    """Explicitly requeue one interrupted or stopped job."""
+    _print_json(resume_job(_root(args), args.name))
+
+
+def worker_run_command(args: argparse.Namespace) -> None:
+    """Run the single local coordinator in the foreground."""
+    _print_json(
+        run_worker(
+            _root(args), args.codex_bin, args.max_parallel, args.max_writers,
+            args.once, args.poll_seconds,
+        )
+    )
+
+
+def worker_start_command(args: argparse.Namespace) -> None:
+    """Start one detached local coordinator."""
+    _print_json(
+        start_background_worker(
+            _root(args), Path(sys.argv[0]).resolve(), args.codex_bin,
+            args.max_parallel, args.max_writers,
+        )
+    )
+
+
+def worker_stop_command(args: argparse.Namespace) -> None:
+    """Request graceful worker shutdown without PID adoption."""
+    request_worker_stop(_root(args))
+    print("worker shutdown requested")
 
 
 def validate_command(args: argparse.Namespace) -> None:
@@ -494,6 +556,7 @@ def build_parser() -> argparse.ArgumentParser:
     create.add_argument("--owned-path", action="append")
     create.add_argument("--validation-command", action="append")
     create.add_argument("--context-ref", action="append")
+    create.add_argument("--dependency", action="append")
     create.add_argument("--codex", action="store_true")
     create.add_argument("--model")
     create.add_argument("--reasoning-effort")
@@ -624,6 +687,41 @@ def build_parser() -> argparse.ArgumentParser:
     codex_doctor = doctor_commands.add_parser("codex")
     codex_doctor.add_argument("--codex-bin", default="codex")
     _set_handler(codex_doctor, doctor_codex_command, "project")
+
+    queue = commands.add_parser("queue")
+    queue_commands = queue.add_subparsers(dest="queue_command", required=True)
+    queue_enqueue = queue_commands.add_parser("enqueue")
+    queue_enqueue.add_argument("name")
+    _set_handler(queue_enqueue, queue_enqueue_command, "project")
+    queue_list = queue_commands.add_parser("list")
+    queue_list.add_argument("--state", choices=(
+        "queued", "running", "succeeded", "needs_decision", "blocked",
+        "cancelled", "interrupted",
+    ))
+    _set_handler(queue_list, queue_list_command, "project")
+    queue_status = queue_commands.add_parser("status")
+    queue_status.add_argument("name")
+    _set_handler(queue_status, queue_status_command, "project")
+    queue_cancel = queue_commands.add_parser("cancel")
+    queue_cancel.add_argument("name")
+    _set_handler(queue_cancel, queue_cancel_command, "project")
+    queue_resume = queue_commands.add_parser("resume")
+    queue_resume.add_argument("name")
+    _set_handler(queue_resume, queue_resume_command, "project")
+
+    worker = commands.add_parser("worker")
+    worker_commands = worker.add_subparsers(dest="worker_command", required=True)
+    for name, handler in (("run", worker_run_command), ("start", worker_start_command)):
+        worker_command = worker_commands.add_parser(name)
+        worker_command.add_argument("--codex-bin", default="codex")
+        worker_command.add_argument("--max-parallel", type=int, default=2)
+        worker_command.add_argument("--max-writers", type=int, default=1)
+        if name == "run":
+            worker_command.add_argument("--once", action="store_true")
+            worker_command.add_argument("--poll-seconds", type=float, default=0.25)
+        _set_handler(worker_command, handler, "project")
+    worker_stop = worker_commands.add_parser("stop")
+    _set_handler(worker_stop, worker_stop_command, "project")
 
     observe = commands.add_parser("observe")
     observe_commands = observe.add_subparsers(dest="observe_command", required=True)
