@@ -120,4 +120,3 @@ docs/history/            # append-only close/promotion events
 - `project/.codex/hooks.json`
 - `project/.codex/agents/*.toml`
 - `experiments/RESULTS.md`
-

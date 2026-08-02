@@ -208,4 +208,3 @@ schema는 일관성을 높이지만 직접 편집성이 낮고, 외부 workspace
 - `experiments/RESULTS.md`
 - `tasks/stabilize-workflow-core/REPORT.md`
 - `tasks/validate-observable-workflow/REPORT.md`
-

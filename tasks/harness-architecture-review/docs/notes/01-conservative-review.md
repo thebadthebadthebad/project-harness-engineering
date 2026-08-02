@@ -101,4 +101,3 @@
 - `project/.codex/agents/*.toml`
 - `project/.codex/hooks.json`
 - `experiments/RESULTS.md`
-

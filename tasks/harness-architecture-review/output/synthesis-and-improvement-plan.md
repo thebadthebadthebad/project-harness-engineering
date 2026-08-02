@@ -280,4 +280,3 @@ subagent는 decomposition proposal, research, document draft, verification을 �
 3. 현재 branch 기반 audit를 정직하게 순차 모델로 명시한다.
 4. 병렬성이 실제 요구라면 별도 worktree spike 후 상태 registry 전환을 결정한다.
 5. 모든 개선에서 “Task 원문은 내려가고, Project에는 typed capsule만 올라온다”를 핵심 acceptance criterion으로 사용한다.
-
