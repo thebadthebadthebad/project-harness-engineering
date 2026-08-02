@@ -608,9 +608,23 @@ def render_task(root: Path, task_id: str) -> str:
         "- Status: " + str(task["state"]["task_status"]),
         "- Base commit: " + str(task["state"].get("base_commit") or "not started"),
         "",
-        "## Owned Write Paths",
+        "## Inputs",
         "",
     ]
+    inputs = task.get("inputs", [])
+    if inputs:
+        for item in inputs:
+            path = str(item["path"])
+            size = str(item["bytes"])
+            digest = str(item["sha256"])
+            lines.append(f"- `{path}` ({size} bytes, SHA-256 `{digest}`)")
+    else:
+        lines.append("- None")
+    lines.extend([
+        "",
+        "## Owned Write Paths",
+        "",
+    ])
     lines.extend("- `" + item + "`" for item in task.get("owned_write_paths", []))
     lines.extend(["", "## Acceptance", ""])
     lines.extend("- " + item for item in task.get("acceptance", []))

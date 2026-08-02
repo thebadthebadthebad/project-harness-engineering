@@ -98,6 +98,17 @@ print(json.dumps({'type':'thread.started','thread_id':'input-thread'})); print(j
             [{"path": "src/input.py", "sha256": expected, "bytes": 11}], run["inputs"]
         )
 
+    def test_task_view_lists_bounded_input_metadata_and_empty_state(self) -> None:
+        expected = hashlib.sha256(b"VALUE = 42\n").hexdigest()
+        self.create("input-view")
+        view = self.ctl("task", "show", "input-view").stdout
+        self.assertIn("## Inputs", view)
+        self.assertIn("`src/input.py` (11 bytes, SHA-256 `" + expected + "`)", view)
+
+        self.ctl("task", "create", "empty-view", "--goal", "No input", "--scope", "View only")
+        empty_view = self.ctl("task", "show", "empty-view").stdout
+        self.assertIn("## Inputs\n\n- None", empty_view)
+
     def test_unsafe_binary_oversize_and_post_contract_drift_are_blocked(self) -> None:
         unsafe = self.ctl(
             "task", "create", "unsafe", "--goal", "x", "--scope", "x", "--input", "../x",
