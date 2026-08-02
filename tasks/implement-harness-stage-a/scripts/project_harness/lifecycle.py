@@ -601,8 +601,11 @@ def check_project(root: Path) -> list[str]:
             if not depth or int(depth.group(1)) != 1:
                 errors.append(".codex/config.toml: max_depth must be 1")
         ignore = root / ".gitignore"
-        if not ignore.is_file() or ".harness/" not in ignore.read_text().splitlines():
-            errors.append(".gitignore must contain .harness/")
+        ignored = ignore.read_text().splitlines() if ignore.is_file() else []
+        if ".harness/" in ignored:
+            errors.append(".gitignore must not hide canonical .harness records")
+        if ".harness/observability/" not in ignored:
+            errors.append(".gitignore must contain .harness/observability/")
     for skill_root in (root / ".agents/skills", template / ".agents/skills"):
         if not skill_root.is_dir():
             continue

@@ -30,6 +30,26 @@ from .lifecycle import (
 )
 from .observability import list_runs, record_event, write_report
 from .repository import find_project_root, task_path
+from .v2 import (
+    apply_promotion,
+    approve_promotion,
+    authority_mode,
+    create_v2_task,
+    initialize_v2,
+    migration_apply,
+    migration_inspect,
+    migration_plan,
+    migration_rollback,
+    migration_switch,
+    migration_verify,
+    prepare_promotion,
+    render_handoff_review,
+    render_project,
+    render_promotion,
+    render_task,
+    start_v2_task,
+    submit_handoff,
+)
 
 
 Handler = Callable[[argparse.Namespace], None]
@@ -43,6 +63,50 @@ def _root(args: argparse.Namespace) -> Path:
 def _print_json(value: Any) -> None:
     """Print stable UTF-8 JSON for command output."""
     print(json.dumps(value, indent=2, ensure_ascii=False, sort_keys=True))
+
+
+def _require_legacy_writer(root: Path) -> None:
+    """Prevent split-brain writes after v2 becomes authoritative."""
+    if authority_mode(root) == "v2":
+        raise HarnessError("legacy lifecycle writer is disabled under v2 authority")
+
+
+def init_command(args: argparse.Namespace) -> None:
+    """Initialize a newly installed Project with v2 authority."""
+    payload = initialize_v2(
+        _root(args),
+        args.project_id,
+        args.goal,
+        args.scope,
+        args.canonical_root,
+        args.harness_version,
+    )
+    _print_json(payload)
+
+
+def show_project_command(args: argparse.Namespace) -> None:
+    """Render the canonical Project state for human review."""
+    print(render_project(_root(args)), end="")
+
+
+def migrate_command(args: argparse.Namespace) -> None:
+    """Run one explicit legacy-to-v2 migration phase."""
+    root = _root(args)
+    if args.migrate_command == "inspect":
+        payload = migration_inspect(root)
+    elif args.migrate_command == "plan":
+        payload = migration_plan(root)
+    elif args.migrate_command == "apply":
+        payload = {"candidate": str(migration_apply(root, args.migration_id))}
+    elif args.migrate_command == "verify":
+        payload = migration_verify(root, args.migration_id)
+    elif args.migrate_command == "switch":
+        payload = migration_switch(root, args.migration_id, args.harness_version)
+    elif args.migrate_command == "rollback":
+        payload = migration_rollback(root, args.migration_id)
+    else:
+        payload = {"authority": authority_mode(root)}
+    _print_json(payload)
 
 
 def context_command(args: argparse.Namespace) -> None:
@@ -84,25 +148,66 @@ def session_command(args: argparse.Namespace) -> None:
 
 def create_command(args: argparse.Namespace) -> None:
     """Create one Task and report its relative path."""
-    create_task(_root(args), args.name, args.goal, args.copy_code, args.link_data)
+    root = _root(args)
+    if authority_mode(root) == "v2":
+        commands = [shlex.split(item) for item in (args.validation_command or [])]
+        payload = create_v2_task(
+            root,
+            args.name,
+            args.goal,
+            args.scope or "",
+            args.output or [],
+            args.acceptance or [],
+            args.owned_path or [],
+            commands,
+        )
+        _print_json(payload)
+        return
+    create_task(root, args.name, args.goal, args.copy_code, args.link_data)
     print("created tasks/" + args.name)
+
+
+def task_show_command(args: argparse.Namespace) -> None:
+    """Render one v2 Task contract and state."""
+    print(render_task(_root(args), args.name), end="")
+
+
+def task_start_command(args: argparse.Namespace) -> None:
+    """Create one isolated manual Task worktree."""
+    _print_json(start_v2_task(_root(args), args.name))
+
+
+def task_submit_command(args: argparse.Namespace) -> None:
+    """Import and validate one typed Task handoff."""
+    _print_json(submit_handoff(_root(args), args.name, args.handoff))
+
+
+def task_review_command(args: argparse.Namespace) -> None:
+    """Render a typed Task handoff for parent-Agent review."""
+    print(render_handoff_review(_root(args), args.name), end="")
 
 
 def validate_command(args: argparse.Namespace) -> None:
     """Validate one Task at an explicit lifecycle phase."""
-    require_task(_root(args), args.name, args.phase)
+    root = _root(args)
+    _require_legacy_writer(root)
+    require_task(root, args.name, args.phase)
     print(args.name + ": " + args.phase + " validation passed")
 
 
 def activate_command(args: argparse.Namespace) -> None:
     """Activate one ready Task."""
-    activate_task(_root(args), args.name)
+    root = _root(args)
+    _require_legacy_writer(root)
+    activate_task(root, args.name)
     print("activated; commit before baseline")
 
 
 def baseline_command(args: argparse.Namespace) -> None:
     """Capture one Task's clean Git and linked-data baseline."""
-    print("baseline " + baseline_task(_root(args), args.name))
+    root = _root(args)
+    _require_legacy_writer(root)
+    print("baseline " + baseline_task(root, args.name))
 
 
 def audit_command(args: argparse.Namespace) -> None:
@@ -146,6 +251,7 @@ def handoff_command(args: argparse.Namespace) -> None:
 def close_command(args: argparse.Namespace) -> None:
     """Close one finished and audited Task."""
     root = _root(args)
+    _require_legacy_writer(root)
     outcome = scalar((task_path(root, args.name) / "STATUS.md").read_text(), "Status")
     close_task(root, args.name)
     print("closed " + args.name + " as " + outcome)
@@ -164,8 +270,30 @@ def check_command(args: argparse.Namespace) -> None:
 
 def promotion_record_command(args: argparse.Namespace) -> None:
     """Record, but never make, a completed Promotion decision."""
-    path = promotion_record(_root(args), args.name, args.decision, args.paths)
+    root = _root(args)
+    _require_legacy_writer(root)
+    path = promotion_record(root, args.name, args.decision, args.paths)
     print("recorded " + args.decision + " in " + str(path))
+
+
+def promotion_prepare_command(args: argparse.Namespace) -> None:
+    """Build an exact-diff packet for selected candidates."""
+    _print_json(prepare_promotion(_root(args), args.task, args.candidate))
+
+
+def promotion_show_command(args: argparse.Namespace) -> None:
+    """Render an exact-diff Promotion packet."""
+    print(render_promotion(_root(args), args.promotion_id), end="")
+
+
+def promotion_approve_command(args: argparse.Namespace) -> None:
+    """Approve the current exact diff and validation packet."""
+    _print_json(approve_promotion(_root(args), args.promotion_id, args.actor))
+
+
+def promotion_apply_command(args: argparse.Namespace) -> None:
+    """Integrate one still-current approved Promotion."""
+    _print_json(apply_promotion(_root(args), args.promotion_id))
 
 
 def observe_mark_command(args: argparse.Namespace) -> None:
@@ -207,6 +335,33 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--root")
     commands = parser.add_subparsers(dest="command", required=True)
 
+    init = commands.add_parser("init")
+    init.add_argument("--project-id", required=True)
+    init.add_argument("--goal", required=True)
+    init.add_argument("--scope", action="append", required=True)
+    init.add_argument("--canonical-root", action="append", default=[])
+    init.add_argument("--harness-version", default="development")
+    _set_handler(init, init_command, "project")
+
+    show = commands.add_parser("show")
+    show_commands = show.add_subparsers(dest="show_command", required=True)
+    show_project = show_commands.add_parser("project")
+    _set_handler(show_project, show_project_command, "project")
+
+    migrate = commands.add_parser("migrate")
+    migrate_commands = migrate.add_subparsers(dest="migrate_command", required=True)
+    for name in ("inspect", "plan", "status"):
+        command = migrate_commands.add_parser(name)
+        _set_handler(command, migrate_command, "project")
+    for name in ("apply", "verify", "rollback"):
+        command = migrate_commands.add_parser(name)
+        command.add_argument("migration_id")
+        _set_handler(command, migrate_command, "project")
+    switch = migrate_commands.add_parser("switch")
+    switch.add_argument("migration_id")
+    switch.add_argument("--harness-version", required=True)
+    _set_handler(switch, migrate_command, "project")
+
     context_parser = commands.add_parser("context")
     context_parser.add_argument("--json", action="store_true")
     context_parser.add_argument("--task")
@@ -230,7 +385,25 @@ def build_parser() -> argparse.ArgumentParser:
     create.add_argument("--goal", required=True)
     create.add_argument("--copy-code", nargs=2, action="append", metavar=("SOURCE", "DEST"))
     create.add_argument("--link-data", nargs=2, action="append", metavar=("SOURCE", "NAME"))
+    create.add_argument("--scope")
+    create.add_argument("--output", action="append")
+    create.add_argument("--acceptance", action="append")
+    create.add_argument("--owned-path", action="append")
+    create.add_argument("--validation-command", action="append")
     _set_handler(create, create_command, "project")
+    show_task = tasks.add_parser("show")
+    show_task.add_argument("name")
+    _set_handler(show_task, task_show_command, "project")
+    start_task = tasks.add_parser("start")
+    start_task.add_argument("name")
+    _set_handler(start_task, task_start_command, "project")
+    submit_task = tasks.add_parser("submit")
+    submit_task.add_argument("name")
+    submit_task.add_argument("--handoff", type=Path, required=True)
+    _set_handler(submit_task, task_submit_command, "project")
+    review_task = tasks.add_parser("review")
+    review_task.add_argument("name")
+    _set_handler(review_task, task_review_command, "project")
     validate = tasks.add_parser("validate")
     validate.add_argument("name")
     validate.add_argument(
@@ -267,6 +440,20 @@ def build_parser() -> argparse.ArgumentParser:
     record.add_argument("--decision", choices=("promoted", "not-promoted"), required=True)
     record.add_argument("--path", dest="paths", action="append")
     _set_handler(record, promotion_record_command, "project")
+    prepare = promotion_commands.add_parser("prepare")
+    prepare.add_argument("--task", required=True)
+    prepare.add_argument("--candidate", action="append", required=True)
+    _set_handler(prepare, promotion_prepare_command, "project")
+    show_promotion = promotion_commands.add_parser("show")
+    show_promotion.add_argument("promotion_id")
+    _set_handler(show_promotion, promotion_show_command, "project")
+    approve = promotion_commands.add_parser("approve")
+    approve.add_argument("promotion_id")
+    approve.add_argument("--actor", required=True)
+    _set_handler(approve, promotion_approve_command, "project")
+    apply = promotion_commands.add_parser("apply")
+    apply.add_argument("promotion_id")
+    _set_handler(apply, promotion_apply_command, "project")
 
     observe = commands.add_parser("observe")
     observe_commands = observe.add_subparsers(dest="observe_command", required=True)

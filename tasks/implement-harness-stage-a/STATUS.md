@@ -3,7 +3,7 @@
 ## Status
 
 
-doing
+completed
 
 허용값은 `todo`, `doing`, `completed`, `stopped`다.
 
@@ -17,18 +17,18 @@ Versioned Project별 bundle, new/apply/update, JSON authority와 읽기 쉬운 V
 
 | Work | Status |
 | --- | --- |
-| Bundle ownership과 new/apply/update | doing |
-| JSON state와 human View | todo |
-| Legacy migration과 semantic parity | todo |
-| Manual worktree Task와 typed handoff | todo |
-| Exact-diff Promotion | todo |
-| Candidate 회귀와 fault 검증 | todo |
-| REPORT와 Promotion 후보 정리 | todo |
+| Bundle ownership과 new/apply/update | completed |
+| JSON state와 human View | completed |
+| Legacy migration과 semantic parity | completed |
+| Manual worktree Task와 typed handoff | completed |
+| Exact-diff Promotion | completed |
+| Candidate 회귀와 fault 검증 | completed |
+| REPORT와 Promotion 후보 정리 | completed |
 
 Work Status는 `todo`, `doing`, `completed` 중 하나를 사용한다.
 
 ## Current Work
 
-Bundle ownership과 new/apply/update
+None
 
 Task가 `completed` 또는 `stopped`이면 `None`으로 작성한다.
