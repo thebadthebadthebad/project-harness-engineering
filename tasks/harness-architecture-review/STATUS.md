@@ -3,7 +3,7 @@
 ## Status
 
 
-doing
+completed
 
 허용값은 `todo`, `doing`, `completed`, `stopped`다.
 
@@ -18,17 +18,17 @@ doing
 | Work | Status |
 | --- | --- |
 | 사용자 의도와 현 하네스 분석 자료 식별 | completed |
-| 현 구조 친화적 관점의 독립 분석 | doing |
-| 현 구조에 대한 강한 비판 관점의 독립 분석 | todo |
-| 현 구조 비의존 신규 하네스 설계 | todo |
-| 세 분석 결과 기록 및 교차 종합 | todo |
-| 개선 선택지와 단계별 계획 작성 | todo |
-| 결과 검증 및 사용자 보고 | todo |
+| 현 구조 친화적 관점의 독립 분석 | completed |
+| 현 구조에 대한 강한 비판 관점의 독립 분석 | completed |
+| 현 구조 비의존 신규 하네스 설계 | completed |
+| 세 분석 결과 기록 및 교차 종합 | completed |
+| 개선 선택지와 단계별 계획 작성 | completed |
+| 결과 검증 및 사용자 보고 | completed |
 
 Work Status는 `todo`, `doing`, `completed` 중 하나를 사용한다.
 
 ## Current Work
 
-현 구조 친화적 관점의 독립 분석
+None
 
 Task가 `completed` 또는 `stopped`이면 `None`으로 작성한다.
