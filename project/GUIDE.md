@@ -1,5 +1,144 @@
 # Project/Task 하네스 운영 가이드
 
+## 공용 하네스 설치와 업데이트
+
+Harness Engineering 저장소에서 versioned bundle을 만든 뒤 대상 Project에 적용한다. 대상 Project는 중앙 registry에 등록되지 않는다.
+
+```bash
+python3 tools/harnessctl.py package --template project --version 2.0.0-a1 --output /tmp/harness-2.0.0-a1
+python3 tools/harnessctl.py new ../my-project --source /tmp/harness-2.0.0-a1 \
+  --project-id my-project --goal "Project goal" --scope "Initial scope"
+python3 tools/harnessctl.py apply ../existing-project --source /tmp/harness-2.0.0-a1
+python3 tools/harnessctl.py apply ../existing-project --source /tmp/harness-2.0.0-a1 --apply
+python3 tools/harnessctl.py update ../existing-project --source /tmp/harness-2.0.0-a1
+python3 tools/harnessctl.py update ../existing-project --source /tmp/harness-2.0.0-a1 --apply
+```
+
+`apply`와 `update`는 기본적으로 dry-run이다. update는 설치 당시 checksum과 현재 파일, 새 bundle을 비교하며 양쪽이 바뀐 managed 파일에서는 중단한다. 반영 뒤 `projectctl check`가 실패하면 건드린 파일과 install metadata를 복구한다. Project의 제품 코드·데이터·README와 기존 AGENTS 통합 내용은 덮어쓰지 않는다.
+
+Legacy Project의 최초 `apply/update`는 migration 명령 설치에 필요한 구조·managed config만 `check --installation-only`로 검사한다. 구버전 STATE/History 의미는 다음 migration parity 단계에서 검증한다. V2 authority 전환 뒤에는 full `check`가 canonical JSON을 기준으로 동작하며 보존된 legacy 파일의 예전 표 열이나 history 이름을 새 writer 형식으로 오인하지 않는다.
+
+## Legacy 상태를 v2로 전환
+
+기존 Project는 legacy와 v2를 동시에 쓰지 않고 다음 명시적 단계로 전환한다.
+
+```bash
+python3 tools/projectctl.py migrate inspect
+python3 tools/projectctl.py migrate plan
+python3 tools/projectctl.py migrate apply legacy-to-v2
+python3 tools/projectctl.py migrate verify legacy-to-v2
+python3 tools/projectctl.py migrate switch legacy-to-v2 --harness-version 2.0.0-a1
+python3 tools/projectctl.py show project
+```
+
+`apply`는 side-by-side candidate만 만들고, `verify`의 normalized semantic parity가 100%일 때만 `switch`가 가능하다. v2 mutation 전에는 `migrate rollback legacy-to-v2`로 authority를 되돌릴 수 있다. 기존 문서는 파일럿·보존 기간·복구 훈련이 끝날 때까지 삭제하지 않는다.
+
+## 수동 v2 Task와 Promotion
+
+```bash
+python3 tools/projectctl.py task create build-one --goal "Build one" \
+  --scope "One bounded change" --output src/result.py --acceptance "Tests pass" \
+  --owned-path task-output --owned-path handoff.json \
+  --validation-command "python3 -m unittest"
+git add .harness && git commit -m "task: create build-one"
+python3 tools/projectctl.py task start build-one
+```
+
+출력된 worktree에서 작업한 뒤 `handoff.json`에 `status`, `summary`, `findings`, `limitations`, 그리고 `id/source/target/rationale` 후보 목록을 작성한다. Project root에서 다음을 실행한다.
+
+```bash
+python3 tools/projectctl.py task submit build-one --handoff handoff.json
+python3 tools/projectctl.py task review build-one
+git add .harness && git commit -m "task: review build-one"
+python3 tools/projectctl.py promotion prepare --task build-one --candidate <candidate-id>
+python3 tools/projectctl.py promotion show <promotion-id>
+python3 tools/projectctl.py promotion approve <promotion-id> --actor <user-id>
+python3 tools/projectctl.py promotion apply <promotion-id>
+```
+
+`approve`는 표시된 exact diff와 validation evidence에만 유효하다. 승인 후 diff가 바뀌거나 official worktree가 dirty이면 `apply`가 중단된다.
+
+## Codex adapter 실행
+
+먼저 현재 CLI capability를 확인한다.
+
+```bash
+python3 tools/projectctl.py doctor codex
+```
+
+Codex Task 생성 시 실행 계약을 함께 기록한다.
+
+```bash
+python3 tools/projectctl.py task create agent-one --goal "Implement one change" \
+  --scope "Only the named module" --input src/existing.py \
+  --output src/change.py --acceptance "Tests pass" \
+  --owned-path task-output --validation-command "python3 -m unittest" --codex \
+  --model gpt-5.6 --reasoning-effort high --reasoning-fallback medium \
+  --sandbox workspace-write --approval-policy never --web-mode disabled \
+  --no-network-access --allowed-tool shell --allowed-tool apply_patch \
+  --time-limit 3600 --token-limit 200000 --agent-role implementation
+git add .harness && git commit -m "task: create agent-one"
+python3 tools/projectctl.py task start agent-one
+python3 tools/projectctl.py task run agent-one
+```
+
+Reasoning fallback은 adapter가 지원값을 고른 뒤 실제 `-c model_reasoning_effort=...`로 전달한다. 요청값, 적용값, fallback, argv, thread id, JSONL events와 usage는 Git-local run evidence에 기록된다. Sandbox·approval·web·network와 발견된 Project skill·MCP 설정은 CLI config로 제어하지만 shell 하위 동작의 allowlist를 강한 보안 경계로 간주하지 않는다.
+
+`--input`은 Project-relative UTF-8 file만 받는다. 기본 제한은 파일당 128 KiB, Task 전체 256 KiB이며 content는 bounded prompt에, path·SHA-256·bytes는 Task와 run evidence에 기록된다. Task 생성 뒤 input이 바뀌면 실행을 차단하므로 변경된 source에는 새 계약이 필요하다. Directory, binary, traversal과 제한 초과 입력은 허용하지 않는다.
+
+## Decision과 Result 재사용
+
+Task가 `needs_decision`이면 해당 Task만 기다린다.
+
+```bash
+python3 tools/projectctl.py decision show <decision-id>
+python3 tools/projectctl.py decision resolve <decision-id> \
+  --choice <option-id> --actor <user-id> --note "Reason"
+```
+
+이전 결과는 검증 상태와 함께 최소 index에 추가한다.
+
+```bash
+python3 tools/projectctl.py result add parser-experiment --kind experiment \
+  --summary "Parser fixture passed" --source-ref task:parser-research \
+  --artifact-ref docs/parser-result.md --verification-status verified --reusable
+python3 tools/projectctl.py result list
+python3 tools/projectctl.py result show parser-experiment
+```
+
+후속 Task 생성 시 `--context-ref result:parser-experiment`를 사용하면 adapter가 digest와 필요한 요약만 context에 넣는다.
+
+## Queue와 background worker
+
+Codex 실행 계약을 가진 ready Task를 commit한 뒤 queue에 넣는다.
+
+```bash
+python3 tools/projectctl.py queue enqueue task-one
+python3 tools/projectctl.py queue enqueue task-two
+python3 tools/projectctl.py queue list
+python3 tools/projectctl.py worker start --max-parallel 2 --max-writers 1
+```
+
+`worker start`는 detached coordinator를 시작하고 Git-local log 경로를 반환하지만 PID를 영구 상태로 저장하거나 다음 worker가 adopt하지 않는다. Foreground 또는 1회 실행은 다음과 같다.
+
+```bash
+python3 tools/projectctl.py worker run --max-parallel 2 --max-writers 1
+python3 tools/projectctl.py worker run --once
+python3 tools/projectctl.py worker stop
+```
+
+상태 확인과 개별 제어:
+
+```bash
+python3 tools/projectctl.py queue status task-one
+python3 tools/projectctl.py queue cancel task-one
+python3 tools/projectctl.py queue resume task-one
+```
+
+Running cancel은 adapter가 주기적으로 queue flag를 확인해 Codex subprocess를 종료한다. Worker가 비정상 종료되면 다음 시작에서 이전 running을 interrupted로 표시할 뿐 자동 복구하지 않는다. 잔존 Codex 프로세스, worktree diff와 Decision을 확인하기 전에는 resume하지 않는다. 한 Task가 `needs_decision` 또는 `blocked`여도 독립 Task는 계속 실행한다.
+
+Queue 작업 후 `.harness` canonical 변경을 parent Agent가 검토하고 commit해야 한다. Queue의 `succeeded`는 handoff 회수 성공이며 Promotion 승인이 아니다.
+
 이 가이드는 공용 템플릿으로 새 Project를 만들고, 사람이 Project 세션과 Task 세션을 전환하면서 독립 작업 결과를 공식 Project로 Promotion하는 전체 절차를 설명한다.
 
 ## 운영 모델
