@@ -3,7 +3,7 @@
 ## Status
 
 
-doing
+stopped
 
 허용값은 `todo`, `doing`, `completed`, `stopped`다.
 
@@ -17,18 +17,18 @@ doing
 
 | Work | Status |
 | --- | --- |
-| Pilot bundle과 source baseline | doing |
-| Legacy apply·migration·rollback pilot | todo |
+| Pilot bundle과 source baseline | completed |
+| Legacy apply·migration·rollback pilot | completed |
 | New Project와 real-code Task 구성 | todo |
 | Real Codex parallel worker pilot | todo |
 | Handoff·Result·Promotion boundary 검토 | todo |
 | Metrics와 Stage D exit 판정 | todo |
-| REPORT 정리 | todo |
+| REPORT 정리 | completed |
 
 Work Status는 `todo`, `doing`, `completed` 중 하나를 사용한다.
 
 ## Current Work
 
-Pilot bundle과 source baseline
+None
 
 Task가 `completed` 또는 `stopped`이면 `None`으로 작성한다.
