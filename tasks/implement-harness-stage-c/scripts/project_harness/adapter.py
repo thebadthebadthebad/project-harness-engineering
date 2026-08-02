@@ -7,8 +7,12 @@ import os
 import re
 import subprocess
 import tempfile
+import time
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Callable, Iterator, Sequence
+
+import fcntl
 
 from .errors import HarnessError
 from .repository import git_dir
@@ -88,6 +92,19 @@ FINAL_HANDOFF_SCHEMA: dict[str, Any] = {
     ],
     "additionalProperties": False,
 }
+
+
+@contextmanager
+def canonical_state_lock(root: Path) -> Iterator[None]:
+    """Serialize short canonical-state mutations across local processes."""
+    path = git_dir(root) / "harness/v2/canonical.lock"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a+") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def _run(argv: Sequence[str], cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
@@ -383,7 +400,54 @@ def _set_task_state(root: Path, task_id: str, status: str, **extra: Any) -> None
     _bump_generation(root)
 
 
-def execute_task(root: Path, task_id: str, codex_bin: str = "codex") -> dict[str, Any]:
+def _run_codex(
+    argv: Sequence[str],
+    prompt: str,
+    seconds: int,
+    cancel_check: Callable[[], bool] | None,
+) -> tuple[subprocess.CompletedProcess[str], bool, bool]:
+    """Run one cancellable Codex process with a hard wall-clock limit."""
+    process = subprocess.Popen(
+        argv,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=os.environ.copy(),
+    )
+    deadline = time.monotonic() + seconds
+    first_input: str | None = prompt
+    while True:
+        cancelled = bool(cancel_check and cancel_check())
+        remaining = deadline - time.monotonic()
+        if cancelled or remaining <= 0:
+            process.terminate()
+            try:
+                stdout, stderr = process.communicate(timeout=2)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                stdout, stderr = process.communicate()
+            return (
+                subprocess.CompletedProcess(argv, 130 if cancelled else 124, stdout, stderr),
+                not cancelled,
+                cancelled,
+            )
+        try:
+            stdout, stderr = process.communicate(
+                input=first_input,
+                timeout=min(0.25, remaining),
+            )
+            return subprocess.CompletedProcess(argv, process.returncode, stdout, stderr), False, False
+        except subprocess.TimeoutExpired:
+            first_input = None
+
+
+def execute_task(
+    root: Path,
+    task_id: str,
+    codex_bin: str = "codex",
+    cancel_check: Callable[[], bool] | None = None,
+) -> dict[str, Any]:
     """Run Codex once and import its structured Task outcome."""
     task = read_task(root, task_id)
     workspace = read_workspace(root, task_id)
@@ -405,24 +469,12 @@ def execute_task(root: Path, task_id: str, codex_bin: str = "codex") -> dict[str
         final_path,
     )
     prompt = build_prompt(root, task, contract)
-    try:
-        process = subprocess.run(
-            argv,
-            input=prompt,
-            text=True,
-            capture_output=True,
-            timeout=contract["limits"]["seconds"],
-            env=os.environ.copy(),
-        )
-        timed_out = False
-    except subprocess.TimeoutExpired as error:
-        process = subprocess.CompletedProcess(
-            argv,
-            124,
-            error.stdout if isinstance(error.stdout, str) else "",
-            error.stderr if isinstance(error.stderr, str) else "",
-        )
-        timed_out = True
+    process, timed_out, cancelled = _run_codex(
+        argv,
+        prompt,
+        contract["limits"]["seconds"],
+        cancel_check,
+    )
     events, thread_id, usage = _parse_events(process.stdout)
     token_total = sum(
         int(usage.get(key, 0) or 0)
@@ -444,6 +496,7 @@ def execute_task(root: Path, task_id: str, codex_bin: str = "codex") -> dict[str
         "argv": argv,
         "exit_code": process.returncode,
         "timed_out": timed_out,
+        "cancelled": cancelled,
         "usage": usage,
         "token_limit_exceeded": token_limit is not None and token_total > token_limit,
         "events": events,
@@ -451,34 +504,43 @@ def execute_task(root: Path, task_id: str, codex_bin: str = "codex") -> dict[str
         "finished_at": utc_now(),
     }
     write_json(runtime / "run.json", evidence)
+    if cancelled:
+        with canonical_state_lock(root):
+            _set_task_state(root, task_id, "blocked", blocked_reason="execution cancelled")
+        return {"status": "cancelled", "reason": "execution cancelled", "evidence": str(runtime / "run.json")}
     if timed_out:
-        _set_task_state(root, task_id, "blocked", blocked_reason="execution timeout")
+        with canonical_state_lock(root):
+            _set_task_state(root, task_id, "blocked", blocked_reason="execution timeout")
         return {"status": "blocked", "reason": "execution timeout", "evidence": str(runtime / "run.json")}
     if process.returncode:
         if _permission_failure(events, process.stderr):
-            decision = request_decision(
-                root,
-                task_id,
-                "Codex execution needs additional authority",
-                "The non-interactive run reported a permission, approval, external-change, or scope boundary.",
-                [
-                    {"id": "revise-contract", "label": "Revise contract", "impact": "Grant only reviewed scope or permission."},
-                    {"id": "stop", "label": "Stop Task", "impact": "Keep current evidence without further execution."},
-                ],
-                "revise-contract",
-                None,
-                True,
-            )
+            with canonical_state_lock(root):
+                decision = request_decision(
+                    root,
+                    task_id,
+                    "Codex execution needs additional authority",
+                    "The non-interactive run reported a permission, approval, external-change, or scope boundary.",
+                    [
+                        {"id": "revise-contract", "label": "Revise contract", "impact": "Grant only reviewed scope or permission."},
+                        {"id": "stop", "label": "Stop Task", "impact": "Keep current evidence without further execution."},
+                    ],
+                    "revise-contract",
+                    None,
+                    True,
+                )
             return {"status": "needs_decision", "decision_id": decision["id"], "evidence": str(runtime / "run.json")}
-        _set_task_state(root, task_id, "blocked", blocked_reason="Codex execution failed")
+        with canonical_state_lock(root):
+            _set_task_state(root, task_id, "blocked", blocked_reason="Codex execution failed")
         return {"status": "blocked", "reason": "Codex execution failed", "evidence": str(runtime / "run.json")}
     if not final_path.is_file():
-        _set_task_state(root, task_id, "blocked", blocked_reason="missing structured final output")
+        with canonical_state_lock(root):
+            _set_task_state(root, task_id, "blocked", blocked_reason="missing structured final output")
         return {"status": "blocked", "reason": "missing structured final output", "evidence": str(runtime / "run.json")}
     try:
         final = read_json(final_path)
     except (HarnessError, json.JSONDecodeError, OSError):
-        _set_task_state(root, task_id, "blocked", blocked_reason="malformed structured final output")
+        with canonical_state_lock(root):
+            _set_task_state(root, task_id, "blocked", blocked_reason="malformed structured final output")
         return {
             "status": "blocked",
             "reason": "malformed structured final output",
@@ -486,35 +548,38 @@ def execute_task(root: Path, task_id: str, codex_bin: str = "codex") -> dict[str
         }
     if final.get("status") == "needs_decision":
         request = final.get("decision_request") or {}
-        decision = request_decision(
-            root,
-            task_id,
-            str(request.get("title", "Task decision required")),
-            str(request.get("reason", final.get("summary", ""))),
-            list(request.get("options", [])),
-            str(request.get("recommended", "")),
-            request.get("safe_default"),
-            bool(request.get("deferrable", True)),
-        )
+        with canonical_state_lock(root):
+            decision = request_decision(
+                root,
+                task_id,
+                str(request.get("title", "Task decision required")),
+                str(request.get("reason", final.get("summary", ""))),
+                list(request.get("options", [])),
+                str(request.get("recommended", "")),
+                request.get("safe_default"),
+                bool(request.get("deferrable", True)),
+            )
         return {"status": "needs_decision", "decision_id": decision["id"], "evidence": str(runtime / "run.json")}
     if final.get("status") == "blocked" or evidence["token_limit_exceeded"]:
         reason = "token limit exceeded" if evidence["token_limit_exceeded"] else str(final.get("blocked_reason") or "Agent blocked")
-        _set_task_state(root, task_id, "blocked", blocked_reason=reason)
+        with canonical_state_lock(root):
+            _set_task_state(root, task_id, "blocked", blocked_reason=reason)
         return {"status": "blocked", "reason": reason, "evidence": str(runtime / "run.json")}
     handoff_source = Path(workspace["workspace"]) / ".harness-agent-handoff.json"
     write_json(handoff_source, final)
-    handoff = submit_handoff(root, task_id, Path(".harness-agent-handoff.json"))
-    handoff_path = root / ".harness/tasks" / task_id / "handoff.json"
-    handoff = _replace_record(
-        handoff_path,
-        handoff,
-        agent_run={
-            "thread_id": thread_id,
-            "run_id": workspace["run_id"],
-            "evidence": str((runtime / "run.json").relative_to(git_dir(root))),
-            "effective_contract": contract,
-            "fallbacks": fallbacks,
-            "usage": usage,
-        },
-    )
+    with canonical_state_lock(root):
+        handoff = submit_handoff(root, task_id, Path(".harness-agent-handoff.json"))
+        handoff_path = root / ".harness/tasks" / task_id / "handoff.json"
+        handoff = _replace_record(
+            handoff_path,
+            handoff,
+            agent_run={
+                "thread_id": thread_id,
+                "run_id": workspace["run_id"],
+                "evidence": str((runtime / "run.json").relative_to(git_dir(root))),
+                "effective_contract": contract,
+                "fallbacks": fallbacks,
+                "usage": usage,
+            },
+        )
     return {"status": "review", "handoff": handoff, "evidence": str(runtime / "run.json")}

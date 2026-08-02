@@ -3,7 +3,7 @@
 ## Status
 
 
-doing
+completed
 
 허용값은 `todo`, `doing`, `completed`, `stopped`다.
 
@@ -17,18 +17,18 @@ Simple SQLite queue, background worker와 제한된 병렬 Codex Task 실행을 
 
 | Work | Status |
 | --- | --- |
-| SQLite queue schema와 CLI | doing |
-| Cancellable Codex adapter | todo |
-| Worker concurrency와 writer limit | todo |
-| Dependency·decision·cancel·interruption | todo |
-| Background start/stop | todo |
-| Candidate race/fault tests | todo |
-| REPORT와 Promotion 후보 정리 | todo |
+| SQLite queue schema와 CLI | completed |
+| Cancellable Codex adapter | completed |
+| Worker concurrency와 writer limit | completed |
+| Dependency·decision·cancel·interruption | completed |
+| Background start/stop | completed |
+| Candidate race/fault tests | completed |
+| REPORT와 Promotion 후보 정리 | completed |
 
 Work Status는 `todo`, `doing`, `completed` 중 하나를 사용한다.
 
 ## Current Work
 
-SQLite queue schema와 CLI
+None
 
 Task가 `completed` 또는 `stopped`이면 `None`으로 작성한다.
