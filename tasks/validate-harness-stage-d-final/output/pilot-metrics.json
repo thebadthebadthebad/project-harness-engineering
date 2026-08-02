@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "stage": "D",
+  "bundle_version": "2.0.0-final-pilot",
+  "legacy_migration": {
+    "duration_ms": 587,
+    "preserved_project_owned_files": 3,
+    "semantic_parity": true,
+    "legacy_digest": "4afbe19aab6df640c424841f5b480e611753cca0b6b8062091311032c2f55f01",
+    "converted_digest": "4afbe19aab6df640c424841f5b480e611753cca0b6b8062091311032c2f55f01",
+    "authority_switch_check": true,
+    "rollback_check": true
+  },
+  "parallel_codex": {
+    "duration_ms": 18834,
+    "jobs": 2,
+    "succeeded": 2,
+    "needs_decision": 0,
+    "blocked": 0,
+    "validation_passed": 2,
+    "parallel_start_skew_seconds": 0,
+    "configured_max_parallel": 2,
+    "configured_max_writers": 1,
+    "input_tokens": 36593,
+    "output_tokens": 735,
+    "reasoning_output_tokens": 340,
+    "fallbacks": 0
+  },
+  "integration": {
+    "source_mutations": 0,
+    "promotion_candidates": 0,
+    "empty_promotion_rejected": true,
+    "reviewed_results_indexed": 2,
+    "result_refs_reused_by_followup_task": 2
+  },
+  "stage_e": {
+    "decision": "deferred",
+    "reason": "A recovery overlap risk was found by source review, but no crash or orphan-process failure was reproduced or observed in the pilot."
+  }
+}
