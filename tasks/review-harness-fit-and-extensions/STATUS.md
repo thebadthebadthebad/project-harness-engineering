@@ -3,7 +3,7 @@
 ## Status
 
 
-doing
+completed
 
 허용값은 `todo`, `doing`, `completed`, `stopped`다.
 
@@ -17,15 +17,15 @@ doing
 
 | Work | Status |
 | --- | --- |
-| Subagent 의도·위험 review | doing |
-| 외부 기능 조사 | todo |
-| 현재 구조 대조와 종합 판단 | todo |
-| 보고서 작성 | todo |
+| Subagent 의도·위험 review | completed |
+| 외부 기능 조사 | completed |
+| 현재 구조 대조와 종합 판단 | completed |
+| 보고서 작성 | completed |
 
 Work Status는 `todo`, `doing`, `completed` 중 하나를 사용한다.
 
 ## Current Work
 
-Subagent 의도·위험 review
+None
 
 Task가 `completed` 또는 `stopped`이면 `None`으로 작성한다.
