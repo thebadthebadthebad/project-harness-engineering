@@ -6,10 +6,11 @@
 - 같은 세션에서는 context의 source 문서가 외부에서 변경됐을 때만 context를 다시 실행한다.
 - context가 제공한 TASK, STATUS, REPORT 계약을 별도로 다시 읽지 않는다. 문서를 수정할 때만 필요한 부분을 확인한다.
 - `TASK.md`의 범위, 입력, 절차, 산출물, 완료 조건에 따라 작업한다.
+- 코드 작업은 변경 경로·compatibility·test 근거, 문서 작업은 독자·authority source·구조·unsupported claim, 연구 작업은 질문·검색 조건·포함/제외·claim 근거·모순과 불확실성 중 현재 Task에 해당하는 항목만 검토한다. 같은 정보를 별도 profile 문서로 반복하지 않는다.
 - Task 결과와 수행 기록은 이 Task 디렉터리에 작성하고 `STATUS.md`에는 현재 Final Goal, Work Plan, Current Work만 유지한다.
 - 함수는 역할·입력·출력이 드러나게 작성하고 재사용 가능한 작은 경계를 사용한다. 이해하기 쉬운 단순 구현을 우선하고 변경한 코드는 관련 검증을 수행한다.
 - Scope 변경이 필요하면 작업을 계속하지 않고 사용자에게 확인한다.
-- 종료 시 `REPORT.md`를 완성하고 Work Plan과 Current Work를 정리한 뒤 Status를 `completed` 또는 `stopped`로 갱신한다.
+- 종료 시 `REPORT.md`에 핵심 findings, limitations, 재현 가능한 검증과 Relevant Files를 남기고 Work Plan과 Current Work를 정리한 뒤 Status를 `completed` 또는 `stopped`로 갱신한다.
 - Skill은 사용자가 `$run-task-workflow`로 명시 호출했을 때만 사용한다.
 - subagent는 사용자가 요청하고 독립적인 읽기 작업을 병렬화하는 이점이 분명할 때만 사용한다. 호출 전에 역할, 범위, 예상 추가 비용을 알리고 사용자 확인을 받는다.
 

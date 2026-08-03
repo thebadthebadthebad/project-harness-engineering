@@ -7,21 +7,33 @@ import json
 import re
 import shutil
 import subprocess
+import time
 import uuid
 from datetime import datetime, timezone
+from functools import wraps
 from pathlib import Path
-from typing import Any, Iterable, Sequence
+from typing import Any, Callable, Iterable, Sequence
 
 from .context import report_condition
 from .documents import atomic_write_text, markdown_table, scalar, section
 from .errors import HarnessError
 from .lifecycle import report_handoff
-from .repository import git_dir, run_command, safe_relative
+from .repository import canonical_state_lock, contained_path, git_dir, run_command, safe_relative
 
 
 SCHEMA_VERSION = 2
 TASK_ID = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
 RECORD_TYPES = {"project", "task", "handoff", "decision", "result", "promotion"}
+
+
+def canonical_mutation(function: Callable[..., Any]) -> Callable[..., Any]:
+    """Run one v2 mutation under the Project-local canonical writer lock."""
+    @wraps(function)
+    def locked(root: Path, *args: Any, **kwargs: Any) -> Any:
+        with canonical_state_lock(root):
+            return function(root, *args, **kwargs)
+
+    return locked
 
 
 def utc_now() -> str:
@@ -119,8 +131,15 @@ def _new_record(record_type: str, record_id: str, **values: Any) -> dict[str, An
 
 
 def _replace_record(path: Path, payload: dict[str, Any], **updates: Any) -> dict[str, Any]:
-    """Revision one canonical record using compare-and-reseal semantics."""
+    """Replace the exact revision the caller read, then reseal the record."""
     validate_record(payload)
+    current = read_json(path)
+    validate_record(current, str(payload["record_type"]))
+    if (
+        current.get("revision") != payload.get("revision")
+        or current.get("content_digest") != payload.get("content_digest")
+    ):
+        raise HarnessError("canonical record changed concurrently: " + str(payload["id"]))
     value = dict(payload)
     value.update(updates)
     value["revision"] = int(payload.get("revision", 1)) + 1
@@ -143,6 +162,7 @@ def _bump_generation(root: Path) -> None:
     write_json(path, payload)
 
 
+@canonical_mutation
 def initialize_v2(
     root: Path,
     project_id: str,
@@ -210,6 +230,185 @@ def render_project(root: Path) -> str:
     lines.extend(["## Canonical Roots", ""])
     lines.extend("- `" + str(item) + "`" for item in payload.get("canonical_roots", []))
     return "\n".join(lines).rstrip() + "\n"
+
+
+def _canonical_record_paths(root: Path) -> list[tuple[Path, str]]:
+    """Return canonical v2 record paths and their expected record types."""
+    base = harness_root(root)
+    records: list[tuple[Path, str]] = [(base / "project.json", "project")]
+    records.extend((path, "task") for path in sorted((base / "tasks").glob("*/task.json")))
+    records.extend((path, "handoff") for path in sorted((base / "tasks").glob("*/handoff.json")))
+    records.extend((path, "decision") for path in sorted((base / "decisions").glob("*.json")))
+    records.extend((path, "result") for path in sorted((base / "results").glob("*.json")))
+    records.extend((path, "promotion") for path in sorted((base / "promotions").glob("*.json")))
+    legacy_history = base / "legacy-history.json"
+    if legacy_history.is_file():
+        records.append((legacy_history, "result"))
+    return records
+
+
+def _reference_exists(root: Path, reference: str) -> bool:
+    """Return whether one supported internal context reference exists."""
+    kind, separator, identifier = reference.partition(":")
+    if not separator or not TASK_ID.fullmatch(identifier):
+        return False
+    paths = {
+        "task": harness_root(root) / "tasks" / identifier / "task.json",
+        "decision": harness_root(root) / "decisions" / (identifier + ".json"),
+        "result": harness_root(root) / "results" / (identifier + ".json"),
+    }
+    return kind in paths and paths[kind].is_file()
+
+
+def check_v2_authority(root: Path) -> list[str]:
+    """Return schema, digest, reference, artifact, and index errors for v2 state."""
+    errors: list[str] = []
+    base = harness_root(root)
+    try:
+        install = read_json(install_path(root))
+        if install.get("schema_version") != SCHEMA_VERSION:
+            errors.append(".harness/install.json: unsupported schema version")
+        if install.get("authority") != "v2":
+            errors.append(".harness/install.json: authority must be v2")
+        generation = install.get("generation")
+        if not isinstance(generation, int) or generation < 0:
+            errors.append(".harness/install.json: generation must be a non-negative integer")
+        if not isinstance(install.get("harness_version"), str):
+            errors.append(".harness/install.json: harness_version must be a string")
+    except (HarnessError, OSError, json.JSONDecodeError) as error:
+        errors.append(".harness/install.json: " + str(error))
+
+    records: dict[Path, dict[str, Any]] = {}
+    for path, expected_type in _canonical_record_paths(root):
+        relative = path.relative_to(root).as_posix()
+        try:
+            payload = read_json(path)
+            validate_record(payload, expected_type)
+            records[path] = payload
+        except (HarnessError, OSError, json.JSONDecodeError) as error:
+            errors.append(relative + ": " + str(error))
+
+    for directory in sorted((base / "tasks").glob("*")):
+        if directory.is_dir() and not (directory / "task.json").is_file():
+            errors.append(str(directory.relative_to(root)) + ": missing task.json")
+
+    project_path = base / "project.json"
+    if project_path not in records:
+        errors.append(".harness/project.json: missing or invalid canonical Project record")
+
+    task_records = {
+        path.parent.name: payload
+        for path, payload in records.items()
+        if path.name == "task.json" and path.parent.parent.name == "tasks"
+    }
+    decision_records = {
+        payload["id"]: payload
+        for path, payload in records.items()
+        if path.parent.name == "decisions"
+    }
+    result_records = {
+        payload["id"]: payload
+        for path, payload in records.items()
+        if path.parent.name == "results" and path.name != "index.json"
+    }
+    for task_id, task in task_records.items():
+        if task.get("id") != task_id:
+            errors.append(".harness/tasks/" + task_id + "/task.json: id does not match path")
+        state = task.get("state")
+        legacy_imported = isinstance(state, dict) and "legacy_state_extra" in state
+        for field in (
+            "outputs", "acceptance", "dependencies", "context_refs",
+            "owned_write_paths", "validation_commands",
+        ):
+            allowed = (list, str) if legacy_imported and field in {"outputs", "acceptance"} else (list,)
+            if not isinstance(task.get(field), allowed):
+                errors.append(".harness/tasks/" + task_id + "/task.json: " + field + " must be a list")
+        for dependency in task.get("dependencies", []):
+            if dependency not in task_records:
+                errors.append("Task " + task_id + " has missing dependency: " + str(dependency))
+        for reference in task.get("context_refs", []):
+            if not _reference_exists(root, str(reference)):
+                errors.append("Task " + task_id + " has invalid context reference: " + str(reference))
+        if not isinstance(state, dict) or state.get("task_status") not in {
+            "todo", "doing", "ready", "active", "review", "needs_decision",
+            "blocked", "completed", "stopped",
+        }:
+            errors.append("Task " + task_id + " has invalid state")
+        elif state.get("decision_id") and state["decision_id"] not in decision_records:
+            errors.append("Task " + task_id + " has missing pending Decision")
+
+    for path, handoff in (
+        (path, payload) for path, payload in records.items() if path.name == "handoff.json"
+    ):
+        task_id = path.parent.name
+        if handoff.get("task_id") != task_id or task_id not in task_records:
+            errors.append(str(path.relative_to(root)) + ": handoff Task reference is invalid")
+
+    for path, decision in (
+        (path, payload) for path, payload in records.items() if path.parent.name == "decisions"
+    ):
+        decision_id = str(decision["id"])
+        if path.name != decision_id + ".json":
+            errors.append(str(path.relative_to(root)) + ": Decision id does not match path")
+        if decision.get("task_id") not in task_records:
+            errors.append("Decision " + decision_id + " references a missing Task")
+
+    for path, promotion in (
+        (path, payload) for path, payload in records.items() if path.parent.name == "promotions"
+    ):
+        if promotion.get("id") + ".json" != path.name:
+            errors.append(str(path.relative_to(root)) + ": Promotion id does not match path")
+        if promotion.get("task_id") not in task_records:
+            errors.append("Promotion " + str(promotion.get("id")) + " references a missing Task")
+
+    for path, result in (
+        (path, payload)
+        for path, payload in records.items()
+        if path.parent.name == "results" and path.name != "index.json"
+    ):
+        result_id = str(result["id"])
+        if path.name != result_id + ".json":
+            errors.append(str(path.relative_to(root)) + ": Result id does not match path")
+        for artifact in result.get("artifacts", []):
+            if not isinstance(artifact, dict) or not artifact.get("path"):
+                errors.append("Result " + result_id + " has malformed artifact provenance")
+                continue
+            try:
+                source = contained_path(root, str(artifact["path"]), must_exist=True)
+                data = source.read_bytes()
+                if artifact.get("sha256") != hashlib.sha256(data).hexdigest():
+                    errors.append("Result " + result_id + " artifact digest mismatch: " + str(artifact["path"]))
+                if artifact.get("bytes") != len(data):
+                    errors.append("Result " + result_id + " artifact size mismatch: " + str(artifact["path"]))
+            except (HarnessError, OSError) as error:
+                errors.append("Result " + result_id + " artifact invalid: " + str(error))
+        if result.get("supersedes") and result["supersedes"] not in result_records:
+            errors.append("Result " + result_id + " supersedes a missing Result")
+
+    index_path = base / "results/index.json"
+    index = records.get(index_path)
+    if result_records and index is None:
+        errors.append(".harness/results/index.json: missing Result index")
+    elif index is not None:
+        entries = index.get("entries")
+        if not isinstance(entries, list):
+            errors.append(".harness/results/index.json: entries must be a list")
+        else:
+            indexed: dict[str, dict[str, Any]] = {}
+            for entry in entries:
+                if not isinstance(entry, dict) or not entry.get("id"):
+                    errors.append(".harness/results/index.json: malformed entry")
+                    continue
+                if entry["id"] in indexed:
+                    errors.append(".harness/results/index.json: duplicate id " + str(entry["id"]))
+                indexed[str(entry["id"])] = entry
+            if set(indexed) != set(result_records):
+                errors.append(".harness/results/index.json: records and index differ")
+            for result_id, result in result_records.items():
+                entry = indexed.get(result_id)
+                if entry and entry.get("digest") != result.get("content_digest"):
+                    errors.append(".harness/results/index.json: stale digest for " + result_id)
+    return errors
 
 
 def _legacy_task(
@@ -282,6 +481,63 @@ def legacy_semantic_model(root: Path) -> dict[str, Any]:
         "tasks": tasks,
         "histories": histories,
     }
+
+
+def legacy_source_inventory(root: Path) -> dict[str, Any]:
+    """Inventory legacy Task sources independently of conversion semantics."""
+    state = (root / "STATE.md").read_text()
+    state_task_ids = sorted(
+        row[0] for row in markdown_table(section(state, "Current Tasks")) if row
+    )
+    task_directories = []
+    partial_tasks: dict[str, list[str]] = {}
+    invalid_task_directories = []
+    for path in sorted((root / "tasks").iterdir()):
+        if path.name == "_template" or not path.is_dir():
+            continue
+        task_directories.append(path.name)
+        if not TASK_ID.fullmatch(path.name):
+            invalid_task_directories.append(path.name)
+        missing = [
+            name for name in ("TASK.md", "STATUS.md", "REPORT.md") if not (path / name).is_file()
+        ]
+        if missing:
+            partial_tasks[path.name] = missing
+    missing_task_directories = sorted(set(state_task_ids) - set(task_directories))
+    return {
+        "state_task_ids": state_task_ids,
+        "task_directories": task_directories,
+        "partial_tasks": partial_tasks,
+        "invalid_task_directories": invalid_task_directories,
+        "missing_task_directories": missing_task_directories,
+        "history_paths": [
+            path.relative_to(root).as_posix()
+            for path in sorted((root / "docs/history").glob("*.md"))
+        ],
+        "supported": not partial_tasks and not invalid_task_directories and not missing_task_directories,
+    }
+
+
+def _require_supported_legacy_inventory(root: Path) -> dict[str, Any]:
+    """Fail before conversion when legacy Task sources would be omitted."""
+    inventory = legacy_source_inventory(root)
+    if inventory["partial_tasks"]:
+        details = ", ".join(
+            task_id + " missing " + "/".join(files)
+            for task_id, files in inventory["partial_tasks"].items()
+        )
+        raise HarnessError("legacy inventory contains partial Tasks: " + details)
+    if inventory["invalid_task_directories"]:
+        raise HarnessError(
+            "legacy inventory contains invalid Task directory names: "
+            + ", ".join(inventory["invalid_task_directories"])
+        )
+    if inventory["missing_task_directories"]:
+        raise HarnessError(
+            "legacy STATE references missing Task directories: "
+            + ", ".join(inventory["missing_task_directories"])
+        )
+    return inventory
 
 
 def legacy_records(root: Path) -> dict[str, dict[str, Any]]:
@@ -391,17 +647,20 @@ def semantic_model_from_records(records: dict[str, dict[str, Any]]) -> dict[str,
 def migration_inspect(root: Path) -> dict[str, Any]:
     """Return a read-only inventory of the supported legacy Project."""
     model = legacy_semantic_model(root)
+    inventory = legacy_source_inventory(root)
     return {
         "authority": authority_mode(root),
         "tasks": len(model["tasks"]),
         "handoffs": sum(item["handoff"] is not None for item in model["tasks"]),
         "histories": len(model["histories"]),
-        "supported": True,
+        "source_inventory": inventory,
+        "supported": inventory["supported"],
     }
 
 
 def migration_plan(root: Path) -> dict[str, Any]:
     """Return conversion paths and semantic parity without writing files."""
+    inventory = _require_supported_legacy_inventory(root)
     records = legacy_records(root)
     legacy = legacy_semantic_model(root)
     converted = semantic_model_from_records(records)
@@ -410,11 +669,14 @@ def migration_plan(root: Path) -> dict[str, Any]:
         "semantic_parity": legacy == converted,
         "legacy_digest": hashlib.sha256(canonical_bytes(legacy)).hexdigest(),
         "converted_digest": hashlib.sha256(canonical_bytes(converted)).hexdigest(),
+        "source_inventory": inventory,
     }
 
 
+@canonical_mutation
 def migration_apply(root: Path, migration_id: str) -> Path:
     """Write side-by-side candidate records without switching authority."""
+    _require_supported_legacy_inventory(root)
     if not TASK_ID.fullmatch(migration_id):
         raise HarnessError("migration id must use lowercase kebab-case")
     destination = harness_root(root) / "migrations" / migration_id / "candidate"
@@ -441,8 +703,18 @@ def _candidate_records(root: Path, migration_id: str) -> dict[str, dict[str, Any
 
 def migration_verify(root: Path, migration_id: str) -> dict[str, Any]:
     """Compare current legacy meaning with one stored candidate."""
+    _require_supported_legacy_inventory(root)
     legacy = legacy_semantic_model(root)
-    converted = semantic_model_from_records(_candidate_records(root, migration_id))
+    records = _candidate_records(root, migration_id)
+    for relative, payload in records.items():
+        expected = (
+            "project" if relative == "project.json"
+            else "task" if relative.endswith("/task.json")
+            else "handoff" if relative.endswith("/handoff.json")
+            else "result"
+        )
+        validate_record(payload, expected)
+    converted = semantic_model_from_records(records)
     return {
         "semantic_parity": legacy == converted,
         "legacy_digest": hashlib.sha256(canonical_bytes(legacy)).hexdigest(),
@@ -450,6 +722,7 @@ def migration_verify(root: Path, migration_id: str) -> dict[str, Any]:
     }
 
 
+@canonical_mutation
 def migration_switch(root: Path, migration_id: str, harness_version: str) -> dict[str, Any]:
     """Activate a verified candidate as v2 authority without deleting legacy files."""
     if authority_mode(root) == "v2":
@@ -487,6 +760,7 @@ def migration_switch(root: Path, migration_id: str, harness_version: str) -> dic
     return install
 
 
+@canonical_mutation
 def migration_rollback(root: Path, migration_id: str) -> dict[str, Any]:
     """Return to legacy authority only before any post-switch v2 mutation."""
     install = read_json(install_path(root))
@@ -500,6 +774,7 @@ def migration_rollback(root: Path, migration_id: str) -> dict[str, Any]:
     return install
 
 
+@canonical_mutation
 def create_v2_task(
     root: Path,
     task_id: str,
@@ -521,15 +796,19 @@ def create_v2_task(
     path = harness_root(root) / "tasks" / task_id / "task.json"
     if path.exists():
         raise HarnessError("Task already exists")
+    for dependency in dependencies:
+        if not task_record_path(root, dependency).is_file():
+            raise HarnessError("Task dependency does not exist: " + dependency)
+    for reference in context_refs:
+        if not _reference_exists(root, reference):
+            raise HarnessError("invalid or missing context reference: " + reference)
     for raw in owned_write_paths:
         safe_relative(raw)
     input_records = []
     total_input_bytes = 0
     for raw in inputs:
         relative = safe_relative(raw)
-        source = root / relative
-        if not source.is_file():
-            raise HarnessError("Task input file does not exist: " + raw)
+        source = contained_path(root, raw, must_exist=True)
         data = source.read_bytes()
         if len(data) > 131072:
             raise HarnessError("Task input exceeds default file limit: " + raw)
@@ -587,6 +866,44 @@ def read_task(root: Path, task_id: str) -> dict[str, Any]:
     return payload
 
 
+def _append_list(lines: list[str], heading: str, values: Sequence[Any], code: bool = False) -> None:
+    """Append one readable Markdown list, including an explicit empty state."""
+    lines.extend(["", "## " + heading, ""])
+    if values:
+        for value in values:
+            text = str(value)
+            lines.append("- `" + text + "`" if code else "- " + text)
+    else:
+        lines.append("- None")
+
+
+def _append_execution_contract(lines: list[str], contract: dict[str, Any]) -> None:
+    """Append a concise human View of one requested/effective Codex contract."""
+    limits = contract.get("limits") or {}
+    lines.extend(
+        [
+            "",
+            "## Codex Execution Contract",
+            "",
+            "- Model: " + str(contract.get("model") or "CLI default"),
+            "- Reasoning effort: " + str(contract.get("reasoning_effort") or "default"),
+            "- Reasoning fallback: " + ", ".join(contract.get("reasoning_fallback", [])),
+            "- Sandbox: " + str(contract.get("sandbox") or "default"),
+            "- Approval policy: " + str(contract.get("approval_policy") or "default"),
+            "- Web / network: " + str(contract.get("web_mode") or "default")
+            + " / " + str(contract.get("network_access", False)).lower(),
+            "- Declared tools: " + ", ".join(contract.get("allowed_tools", [])),
+            "- MCP: " + (", ".join(contract.get("allowed_mcp", [])) or "None"),
+            "- Skills: " + (", ".join(contract.get("allowed_skills", [])) or "None"),
+            "- Hard wall-time: " + str(limits.get("seconds") or "default") + " seconds",
+            "- Post-run token ceiling: " + str(limits.get("tokens") or "not set"),
+            "",
+            "> Shell/apply_patch declarations are Agent policy and audit expectations, not an OS-level allowlist. "
+            "The token ceiling is evaluated from completed usage; wall-time is the hard execution stop.",
+        ]
+    )
+
+
 def render_task(root: Path, task_id: str) -> str:
     """Render one Task contract and current state as Markdown."""
     task = read_task(root, task_id)
@@ -620,20 +937,14 @@ def render_task(root: Path, task_id: str) -> str:
             lines.append(f"- `{path}` ({size} bytes, SHA-256 `{digest}`)")
     else:
         lines.append("- None")
-    lines.extend([
-        "",
-        "## Owned Write Paths",
-        "",
-    ])
-    lines.extend("- `" + item + "`" for item in task.get("owned_write_paths", []))
-    lines.extend(["", "## Acceptance", ""])
-    lines.extend("- " + item for item in task.get("acceptance", []))
-    lines.extend(["", "## Context References", ""])
-    lines.extend("- `" + item + "`" for item in task.get("context_refs", []))
+    _append_list(lines, "Outputs", task.get("outputs", []), code=True)
+    _append_list(lines, "Dependencies", task.get("dependencies", []), code=True)
+    _append_list(lines, "Owned Write Paths", task.get("owned_write_paths", []), code=True)
+    _append_list(lines, "Acceptance", task.get("acceptance", []))
+    _append_list(lines, "Validation Commands", [" ".join(item) for item in task.get("validation_commands", [])], code=True)
+    _append_list(lines, "Context References", task.get("context_refs", []), code=True)
     if task.get("execution") is not None:
-        lines.extend(["", "## Codex Execution Contract", "", "```json"])
-        lines.append(json.dumps(task["execution"], ensure_ascii=False, indent=2, sort_keys=True))
-        lines.extend(["```", ""])
+        _append_execution_contract(lines, task["execution"])
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -657,6 +968,7 @@ def read_workspace(root: Path, task_id: str) -> dict[str, Any]:
     return read_json(_workspace_metadata_path(root, task_id))
 
 
+@canonical_mutation
 def start_v2_task(
     root: Path,
     task_id: str,
@@ -705,22 +1017,74 @@ def _changed_paths(workspace: Path, base: str) -> list[str]:
     return sorted(set(item for item in changed if item))
 
 
-def run_validations(workspace: Path, commands: Sequence[Sequence[str]]) -> list[dict[str, Any]]:
-    """Run deterministic validation argv lists without shell interpretation."""
+def run_validations(
+    root: Path,
+    workspace: Path,
+    commands: Sequence[Sequence[str]],
+    evidence_key: str,
+    timeout_seconds: int = 300,
+) -> list[dict[str, Any]]:
+    """Run bounded validation argv and preserve full Git-local evidence."""
     results = []
-    for command in commands:
+    evidence_root = _runtime_root(root) / "validation" / safe_relative(evidence_key)
+    evidence_root.mkdir(parents=True, exist_ok=True)
+    for index, command in enumerate(commands, 1):
         if not command:
             raise HarnessError("validation command cannot be empty")
-        process = subprocess.run(command, cwd=workspace, text=True, capture_output=True)
+        started = time.monotonic()
+        timed_out = False
+        try:
+            process = subprocess.run(
+                command,
+                cwd=workspace,
+                text=True,
+                capture_output=True,
+                timeout=timeout_seconds,
+            )
+            exit_code = process.returncode
+            stdout = process.stdout
+            stderr = process.stderr
+        except subprocess.TimeoutExpired as error:
+            timed_out = True
+            exit_code = 124
+            stdout = str(error.stdout or "")
+            stderr = str(error.stderr or "") + "\nvalidation timed out"
+        duration_ms = round((time.monotonic() - started) * 1000)
+        log = (
+            "argv: " + json.dumps(list(command), ensure_ascii=False) + "\n"
+            + "exit_code: " + str(exit_code) + "\n"
+            + "timed_out: " + str(timed_out).lower() + "\n\n"
+            + "[stdout]\n" + stdout + "\n[stderr]\n" + stderr
+        )
+        log_path = evidence_root / (str(index).zfill(2) + ".log")
+        atomic_write_text(log_path, log)
         results.append(
             {
                 "argv": list(command),
-                "exit_code": process.returncode,
-                "stdout": process.stdout[-4000:],
-                "stderr": process.stderr[-4000:],
+                "exit_code": exit_code,
+                "timed_out": timed_out,
+                "duration_ms": duration_ms,
+                "stdout": stdout[-4000:],
+                "stderr": stderr[-4000:],
+                "log_path": log_path.relative_to(git_dir(root)).as_posix(),
+                "log_sha256": hashlib.sha256(log.encode()).hexdigest(),
             }
         )
     return results
+
+
+def validation_digest(results: Sequence[dict[str, Any]]) -> str:
+    """Digest validation identity and full-log evidence without elapsed-time noise."""
+    subjects = [
+        {
+            "argv": item["argv"],
+            "exit_code": item["exit_code"],
+            "timed_out": item.get("timed_out", False),
+            "log_sha256": item.get("log_sha256"),
+        }
+        for item in results
+    ]
+    return hashlib.sha256(canonical_bytes(subjects)).hexdigest()
 
 
 def submit_handoff(root: Path, task_id: str, source: Path) -> dict[str, Any]:
@@ -732,7 +1096,8 @@ def submit_handoff(root: Path, task_id: str, source: Path) -> dict[str, Any]:
         raise HarnessError("Task workspace is not active")
     worktree = Path(workspace["workspace"])
     source_path = safe_relative(source.as_posix())
-    payload = read_json(worktree / source_path)
+    handoff_source = contained_path(worktree, source_path.as_posix(), must_exist=True)
+    payload = read_json(handoff_source)
     if payload.get("status") != "completed":
         raise HarnessError("Stage A handoff must be completed")
     candidates = payload.get("candidates")
@@ -746,10 +1111,14 @@ def submit_handoff(root: Path, task_id: str, source: Path) -> dict[str, Any]:
         if not isinstance(candidate, dict) or not candidate.get("id"):
             raise HarnessError("invalid Promotion candidate")
         source_path = safe_relative(str(candidate.get("source", "")))
+        contained_path(worktree, source_path.as_posix(), must_exist=True)
         safe_relative(str(candidate.get("target", "")))
-        if not (worktree / source_path).is_file():
-            raise HarnessError("candidate source does not exist: " + str(source_path))
-    validation = run_validations(worktree, task.get("validation_commands", []))
+    validation = run_validations(
+        root,
+        worktree,
+        task.get("validation_commands", []),
+        "tasks/" + task_id + "/" + str(workspace["run_id"]),
+    )
     handoff = _new_record(
         "handoff",
         "handoff-" + task_id,
@@ -763,13 +1132,17 @@ def submit_handoff(root: Path, task_id: str, source: Path) -> dict[str, Any]:
         changed_paths=changed,
         validation=validation,
     )
-    write_json(harness_root(root) / "tasks" / task_id / "handoff.json", handoff)
-    state = dict(task["state"])
-    state["task_status"] = "review"
-    _replace_record(task_record_path(root, task_id), task, state=state)
-    workspace["state"] = "review"
-    write_json(_workspace_metadata_path(root, task_id), workspace)
-    _bump_generation(root)
+    with canonical_state_lock(root):
+        current_task = read_task(root, task_id)
+        if current_task.get("content_digest") != task.get("content_digest"):
+            raise HarnessError("Task changed while handoff validation was running")
+        write_json(harness_root(root) / "tasks" / task_id / "handoff.json", handoff)
+        state = dict(current_task["state"])
+        state["task_status"] = "review"
+        _replace_record(task_record_path(root, task_id), current_task, state=state)
+        workspace["state"] = "review"
+        write_json(_workspace_metadata_path(root, task_id), workspace)
+        _bump_generation(root)
     return handoff
 
 
@@ -783,19 +1156,36 @@ def render_handoff_review(root: Path, task_id: str) -> str:
         "## Summary",
         "",
         handoff["summary"],
-        "",
-        "## Validation",
-        "",
     ]
+    _append_list(lines, "Acceptance to Review", read_task(root, task_id).get("acceptance", []))
+    _append_list(lines, "Findings", handoff.get("findings", []))
+    _append_list(lines, "Limitations", handoff.get("limitations", []))
+    lines.extend(["", "## Validation", ""])
     for item in handoff["validation"]:
-        lines.append("- `" + " ".join(item["argv"]) + "`: exit " + str(item["exit_code"]))
+        line = "- `" + " ".join(item["argv"]) + "`: exit " + str(item["exit_code"])
+        if item.get("timed_out"):
+            line += " (timed out)"
+        if item.get("log_path"):
+            line += " — full log `" + str(item["log_path"]) + "`"
+        lines.append(line)
     lines.extend(["", "## Promotion Candidates", ""])
     for item in handoff["candidates"]:
         lines.append(
             "- **" + item["id"] + "**: `" + item["source"] + "` → `" + item["target"] + "` — " + str(item.get("rationale", ""))
         )
     lines.extend(["", "## Changed Paths", ""])
-    lines.extend("- `" + item + "`" for item in handoff["changed_paths"])
+    lines.extend("- `" + item + "`" for item in handoff["changed_paths"] or ["None"])
+    agent_run = handoff.get("agent_run")
+    if isinstance(agent_run, dict):
+        _append_execution_contract(lines, agent_run.get("effective_contract", {}))
+        fallbacks = agent_run.get("fallbacks", [])
+        lines.extend(["", "### Capability Fallbacks", ""])
+        if fallbacks:
+            lines.extend("- `" + json.dumps(item, ensure_ascii=False, sort_keys=True) + "`" for item in fallbacks)
+        else:
+            lines.append("- None")
+        usage = agent_run.get("usage", {})
+        lines.extend(["", "### Usage", "", "```json", json.dumps(usage, ensure_ascii=False, indent=2, sort_keys=True), "```"])
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -820,6 +1210,8 @@ def prepare_promotion(root: Path, task_id: str, candidate_ids: Sequence[str]) ->
     validate_record(handoff, "handoff")
     if any(item["exit_code"] for item in handoff["validation"]):
         raise HarnessError("Task validation failed")
+    if run_command(root, ("git", "status", "--porcelain")):
+        raise HarnessError("official worktree must be clean before Promotion prepare")
     selected = [item for item in handoff["candidates"] if item["id"] in candidate_ids]
     if not selected or {item["id"] for item in selected} != set(candidate_ids):
         raise HarnessError("unknown or empty Promotion candidate selection")
@@ -832,14 +1224,19 @@ def prepare_promotion(root: Path, task_id: str, candidate_ids: Sequence[str]) ->
     run_command(root, ("git", "worktree", "add", "-b", branch, str(integration), base))
     targets = []
     for item in selected:
-        source = task_workspace / safe_relative(item["source"])
-        target = integration / safe_relative(item["target"])
+        source = contained_path(task_workspace, str(item["source"]), must_exist=True)
+        target = contained_path(integration, str(item["target"]))
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, target)
         targets.append(safe_relative(item["target"]).as_posix())
     run_command(integration, ("git", "add", "-N", "--", *targets))
     task = read_task(root, task_id)
-    validation = run_validations(integration, task.get("validation_commands", []))
+    validation = run_validations(
+        root,
+        integration,
+        task.get("validation_commands", []),
+        "promotions/" + promotion_id + "/prepare",
+    )
     diff = _promotion_diff(integration)
     payload = {
         "promotion_id": promotion_id,
@@ -849,9 +1246,11 @@ def prepare_promotion(root: Path, task_id: str, candidate_ids: Sequence[str]) ->
         "branch": branch,
         "workspace": str(integration),
         "targets": targets,
+        "task_digest": task["content_digest"],
+        "diff": diff,
         "diff_sha256": hashlib.sha256(diff.encode()).hexdigest(),
         "validation": validation,
-        "validation_digest": hashlib.sha256(canonical_bytes(validation)).hexdigest(),
+        "validation_digest": validation_digest(validation),
         "status": "staged",
         "created_at": utc_now(),
     }
@@ -883,14 +1282,39 @@ def _refresh_promotion(payload: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
+def _require_current_promotion_base(root: Path, payload: dict[str, Any]) -> None:
+    """Require a clean official worktree at the exact staged base commit."""
+    current = run_command(root, ("git", "rev-parse", "HEAD"))
+    if current != payload["base_commit"]:
+        raise HarnessError("official HEAD changed; prepare a new Promotion packet")
+    if run_command(root, ("git", "status", "--porcelain")):
+        raise HarnessError("official worktree must be clean")
+    task = read_task(root, str(payload["task_id"]))
+    if task.get("content_digest") != payload.get("task_digest"):
+        raise HarnessError("Task contract changed; prepare a new Promotion packet")
+
+
 def approve_promotion(root: Path, promotion_id: str, actor: str) -> dict[str, Any]:
     """Record one exact-diff packet approval in Git-local runtime state."""
     path = _promotion_runtime_path(root, promotion_id)
     payload = _refresh_promotion(read_json(path))
+    if payload.get("status") != "staged":
+        raise HarnessError("Promotion must be staged before approval")
+    _require_current_promotion_base(root, payload)
     if payload["current_diff_sha256"] != payload["diff_sha256"]:
         raise HarnessError("staged Promotion diff changed")
-    if any(item["exit_code"] for item in payload["validation"]):
+    task = read_task(root, str(payload["task_id"]))
+    validation = run_validations(
+        root,
+        Path(payload["workspace"]),
+        task.get("validation_commands", []),
+        "promotions/" + promotion_id + "/approve",
+    )
+    if any(item["exit_code"] for item in validation):
         raise HarnessError("Promotion validation failed")
+    payload["validation"] = validation
+    payload["validation_digest"] = validation_digest(validation)
+    payload["validated_at"] = utc_now()
     payload["status"] = "approved"
     payload["approval"] = {
         "actor": actor,
@@ -907,36 +1331,56 @@ def apply_promotion(root: Path, promotion_id: str) -> dict[str, Any]:
     payload = _refresh_promotion(read_json(path))
     if payload.get("status") != "approved":
         raise HarnessError("Promotion is not approved")
+    _require_current_promotion_base(root, payload)
     if payload["current_diff_sha256"] != payload["diff_sha256"]:
         raise HarnessError("approved Promotion diff changed")
     if payload["approval"]["subject_digest"] != promotion_subject(payload):
         raise HarnessError("Promotion approval is stale")
-    if run_command(root, ("git", "status", "--porcelain")):
-        raise HarnessError("official worktree must be clean")
     integration = Path(payload["workspace"])
-    run_command(integration, ("git", "add", "--", *payload["targets"]))
-    run_command(integration, ("git", "commit", "-m", "promote: " + payload["task_id"]))
-    source_commit = run_command(integration, ("git", "rev-parse", "HEAD"))
-    run_command(root, ("git", "cherry-pick", source_commit))
-    official_commit = run_command(root, ("git", "rev-parse", "HEAD"))
-    canonical = _new_record(
-        "promotion",
-        promotion_id,
-        task_id=payload["task_id"],
-        candidate_ids=payload["candidate_ids"],
-        base_commit=payload["base_commit"],
-        diff_sha256=payload["diff_sha256"],
-        validation=payload["validation"],
-        approval=payload["approval"],
-        official_commit=official_commit,
-        status="integrated",
+    task = read_task(root, str(payload["task_id"]))
+    apply_validation = run_validations(
+        root,
+        integration,
+        task.get("validation_commands", []),
+        "promotions/" + promotion_id + "/apply",
     )
-    canonical_path = harness_root(root) / "promotions" / (promotion_id + ".json")
-    write_json(canonical_path, canonical)
-    _bump_generation(root)
-    run_command(root, ("git", "add", "--", str(canonical_path.relative_to(root)), ".harness/install.json"))
-    run_command(root, ("git", "commit", "-m", "chore: record " + promotion_id))
+    if any(item["exit_code"] for item in apply_validation):
+        payload["status"] = "stale"
+        payload["apply_validation"] = apply_validation
+        write_json(path, payload)
+        raise HarnessError("Promotion validation failed immediately before apply")
+    with canonical_state_lock(root):
+        payload = _refresh_promotion(read_json(path))
+        _require_current_promotion_base(root, payload)
+        if payload["current_diff_sha256"] != payload["diff_sha256"]:
+            raise HarnessError("approved Promotion diff changed")
+        if payload["approval"]["subject_digest"] != promotion_subject(payload):
+            raise HarnessError("Promotion approval is stale")
+        run_command(integration, ("git", "add", "--", *payload["targets"]))
+        run_command(integration, ("git", "commit", "-m", "promote: " + payload["task_id"]))
+        source_commit = run_command(integration, ("git", "rev-parse", "HEAD"))
+        run_command(root, ("git", "cherry-pick", source_commit))
+        official_commit = run_command(root, ("git", "rev-parse", "HEAD"))
+        canonical = _new_record(
+            "promotion",
+            promotion_id,
+            task_id=payload["task_id"],
+            candidate_ids=payload["candidate_ids"],
+            base_commit=payload["base_commit"],
+            diff_sha256=payload["diff_sha256"],
+            validation=apply_validation,
+            approved_validation=payload["validation"],
+            approval=payload["approval"],
+            official_commit=official_commit,
+            status="integrated",
+        )
+        canonical_path = harness_root(root) / "promotions" / (promotion_id + ".json")
+        write_json(canonical_path, canonical)
+        _bump_generation(root)
+        run_command(root, ("git", "add", "--", str(canonical_path.relative_to(root)), ".harness/install.json"))
+        run_command(root, ("git", "commit", "-m", "chore: record " + promotion_id))
     payload["status"] = "integrated"
+    payload["apply_validation"] = apply_validation
     payload["official_commit"] = official_commit
     payload["record_commit"] = run_command(root, ("git", "rev-parse", "HEAD"))
     write_json(path, payload)
@@ -956,6 +1400,7 @@ def render_promotion(root: Path, promotion_id: str) -> str:
         "- Status: " + str(payload["status"]),
         "- Base: `" + str(payload["base_commit"]) + "`",
         "- Diff SHA-256: `" + str(payload["diff_sha256"]) + "`",
+        "- Validation SHA-256: `" + str(payload.get("validation_digest") or "not recorded") + "`",
         "",
         "## Candidates",
         "",
@@ -963,10 +1408,20 @@ def render_promotion(root: Path, promotion_id: str) -> str:
     lines.extend("- `" + item + "`" for item in payload["candidate_ids"])
     lines.extend(["", "## Validation", ""])
     for item in payload["validation"]:
-        lines.append("- `" + " ".join(item["argv"]) + "`: exit " + str(item["exit_code"]))
+        line = "- `" + " ".join(item["argv"]) + "`: exit " + str(item["exit_code"])
+        if item.get("timed_out"):
+            line += " (timed out)"
+        if item.get("log_path"):
+            line += " — full log `" + str(item["log_path"]) + "`"
+        lines.append(line)
+    diff = payload.get("diff")
+    if diff is None and runtime.is_file() and payload.get("status") in {"staged", "approved", "stale"}:
+        diff = _promotion_diff(Path(payload["workspace"]))
+    lines.extend(["", "## Exact Diff", "", "```diff", str(diff or "Diff unavailable after integration."), "```"])
     return "\n".join(lines).rstrip() + "\n"
 
 
+@canonical_mutation
 def request_decision(
     root: Path,
     task_id: str,
@@ -1052,6 +1507,7 @@ def render_decision(root: Path, decision_id: str) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
+@canonical_mutation
 def resolve_decision(
     root: Path,
     decision_id: str,
@@ -1087,6 +1543,45 @@ def _result_index_path(root: Path) -> Path:
     return harness_root(root) / "results/index.json"
 
 
+def _result_entry(record: dict[str, Any]) -> dict[str, Any]:
+    """Return one compact Result index entry."""
+    return {
+        "id": record["id"],
+        "kind": record["kind"],
+        "summary": record["summary"],
+        "verification_status": record["verification_status"],
+        "reusable": record["reusable"],
+        "supersedes": record.get("supersedes"),
+        "digest": record["content_digest"],
+    }
+
+
+def _result_records(root: Path) -> list[dict[str, Any]]:
+    """Read all non-index Result records in stable id order."""
+    records = []
+    for path in sorted((harness_root(root) / "results").glob("*.json")):
+        if path.name == "index.json":
+            continue
+        payload = read_json(path)
+        validate_record(payload, "result")
+        records.append(payload)
+    return sorted(records, key=lambda item: str(item["id"]))
+
+
+def _write_result_index(root: Path) -> dict[str, Any]:
+    """Rebuild the compact Result index from canonical Result records."""
+    entries = [_result_entry(record) for record in _result_records(root)]
+    index_path = _result_index_path(root)
+    if index_path.is_file():
+        index = read_json(index_path)
+        validate_record(index, "result")
+        return _replace_record(index_path, index, entries=entries)
+    index = _new_record("result", "result-index", kind="index", entries=entries)
+    write_json(index_path, index)
+    return index
+
+
+@canonical_mutation
 def add_result(
     root: Path,
     result_id: str,
@@ -1097,8 +1592,10 @@ def add_result(
     verification_status: str,
     reusable: bool,
     supersedes: str | None,
+    reviewed_by: str | None = None,
+    verification_note: str = "",
 ) -> dict[str, Any]:
-    """Add one discoverable result and update the small canonical index."""
+    """Add one provenance-bearing Result and rebuild the compact index."""
     require_v2(root)
     if not TASK_ID.fullmatch(result_id):
         raise HarnessError("result id must use lowercase kebab-case")
@@ -1106,11 +1603,26 @@ def add_result(
         raise HarnessError("unsupported result kind")
     if verification_status not in {"unverified", "reviewed", "verified", "rejected"}:
         raise HarnessError("invalid result verification status")
+    if verification_status in {"reviewed", "verified"} and not reviewed_by:
+        raise HarnessError("reviewed or verified Result requires --reviewed-by")
+    if verification_status in {"reviewed", "verified"} and not (source_refs or artifact_refs):
+        raise HarnessError("reviewed or verified Result requires source or artifact evidence")
     path = harness_root(root) / "results" / (result_id + ".json")
     if path.exists():
         raise HarnessError("result already exists")
+    artifacts = []
     for raw in artifact_refs:
-        safe_relative(raw)
+        source = contained_path(root, raw, must_exist=True)
+        data = source.read_bytes()
+        artifacts.append(
+            {
+                "path": safe_relative(raw).as_posix(),
+                "sha256": hashlib.sha256(data).hexdigest(),
+                "bytes": len(data),
+            }
+        )
+    if supersedes and not (harness_root(root) / "results" / (supersedes + ".json")).is_file():
+        raise HarnessError("superseded Result does not exist")
     record = _new_record(
         "result",
         result_id,
@@ -1118,60 +1630,61 @@ def add_result(
         summary=summary,
         source_refs=list(source_refs),
         artifact_refs=list(artifact_refs),
+        artifacts=artifacts,
         verification_status=verification_status,
+        reviewed_by=reviewed_by,
+        verification_note=verification_note,
         reusable=reusable,
         supersedes=supersedes,
     )
-    write_json(path, record)
-    index_path = _result_index_path(root)
-    if index_path.is_file():
-        index = read_json(index_path)
-        validate_record(index, "result")
-        entries = list(index.get("entries", []))
-        entries.append(
-            {
-                "id": result_id,
-                "kind": kind,
-                "summary": summary,
-                "verification_status": verification_status,
-                "reusable": reusable,
-                "supersedes": supersedes,
-                "digest": record["content_digest"],
-            }
-        )
-        _replace_record(index_path, index, entries=entries)
-    else:
-        write_json(
-            index_path,
-            _new_record(
-                "result",
-                "result-index",
-                kind="index",
-                entries=[
-                    {
-                        "id": result_id,
-                        "kind": kind,
-                        "summary": summary,
-                        "verification_status": verification_status,
-                        "reusable": reusable,
-                        "supersedes": supersedes,
-                        "digest": record["content_digest"],
-                    }
-                ],
-            ),
-        )
+    try:
+        write_json(path, record)
+        _write_result_index(root)
+    except Exception:
+        path.unlink(missing_ok=True)
+        raise
     _bump_generation(root)
     return record
 
 
-def list_results(root: Path) -> list[dict[str, Any]]:
-    """Return compact result-index entries."""
+@canonical_mutation
+def rebuild_result_index(root: Path) -> dict[str, Any]:
+    """Repair the compact Result index from canonical Result records."""
+    require_v2(root)
+    index = _write_result_index(root)
+    _bump_generation(root)
+    return index
+
+
+def list_results(
+    root: Path,
+    kind: str | None = None,
+    verification_status: str | None = None,
+    reusable: bool | None = None,
+    text: str | None = None,
+) -> list[dict[str, Any]]:
+    """Return filtered compact Result-index entries."""
     path = _result_index_path(root)
     if not path.is_file():
         return []
     index = read_json(path)
     validate_record(index, "result")
-    return list(index.get("entries", []))
+    entries = list(index.get("entries", []))
+    if kind is not None:
+        entries = [item for item in entries if item.get("kind") == kind]
+    if verification_status is not None:
+        entries = [
+            item for item in entries if item.get("verification_status") == verification_status
+        ]
+    if reusable is not None:
+        entries = [item for item in entries if bool(item.get("reusable")) == reusable]
+    if text:
+        needle = text.casefold()
+        entries = [
+            item for item in entries
+            if needle in (str(item.get("id", "")) + " " + str(item.get("summary", ""))).casefold()
+        ]
+    return entries
 
 
 def render_result(root: Path, result_id: str) -> str:
@@ -1183,6 +1696,7 @@ def render_result(root: Path, result_id: str) -> str:
         "",
         "- Kind: " + result["kind"],
         "- Verification: " + result["verification_status"],
+        "- Reviewed by: " + str(result.get("reviewed_by") or "not recorded"),
         "- Reusable: " + str(result["reusable"]).lower(),
         "- Supersedes: " + str(result.get("supersedes") or "none"),
         "",
@@ -1195,5 +1709,14 @@ def render_result(root: Path, result_id: str) -> str:
     ]
     lines.extend("- `" + item + "`" for item in result.get("source_refs", []))
     lines.extend(["", "## Artifacts", ""])
-    lines.extend("- `" + item + "`" for item in result.get("artifact_refs", []))
+    artifacts = result.get("artifacts", [])
+    if artifacts:
+        for item in artifacts:
+            lines.append(
+                "- `" + str(item["path"]) + "` (" + str(item["bytes"])
+                + " bytes, SHA-256 `" + str(item["sha256"]) + "`)"
+            )
+    else:
+        lines.extend("- `" + item + "`" for item in result.get("artifact_refs", []))
+    lines.extend(["", "## Verification Note", "", str(result.get("verification_note") or "None")])
     return "\n".join(lines).rstrip() + "\n"

@@ -1,94 +1,248 @@
-# Project/Task 하네스 운영 가이드
+# Project Harness Operations Guide
 
-## 공용 하네스 설치와 업데이트
+이 문서는 공용 하네스를 설치·갱신하고, 적용 Project에서 Task를 생성·실행·검토·반영하는 실제 절차를 설명한다. 새 Project의 기본 authority는 v2다. Legacy Markdown lifecycle은 migration 전 Project에만 사용하며 마지막 부록으로 분리한다.
 
-Harness Engineering 저장소에서 versioned bundle을 만든 뒤 대상 Project에 적용한다. 대상 Project는 중앙 registry에 등록되지 않는다.
+## 1. 운영 모델
 
-```bash
-python3 tools/harnessctl.py package --template project --version 2.0.0-a1 --output /tmp/harness-2.0.0-a1
-python3 tools/harnessctl.py new ../my-project --source /tmp/harness-2.0.0-a1 \
-  --project-id my-project --goal "Project goal" --scope "Initial scope"
-python3 tools/harnessctl.py apply ../existing-project --source /tmp/harness-2.0.0-a1
-python3 tools/harnessctl.py apply ../existing-project --source /tmp/harness-2.0.0-a1 --apply
-python3 tools/harnessctl.py update ../existing-project --source /tmp/harness-2.0.0-a1
-python3 tools/harnessctl.py update ../existing-project --source /tmp/harness-2.0.0-a1 --apply
+```text
+Project goal과 current objective
+  → Task contract: goal, scope, input, output, ownership, acceptance, validation
+  → worktree 격리
+  → 사람 또는 Codex adapter가 Task 수행
+  → structured handoff와 validation
+  → 부모 Agent review
+  → 필요한 Task만 Decision 대기
+  → 사용자가 selected candidate의 exact diff 승인
+  → Promotion apply
+  → 재사용 가치가 있는 결과만 Result index에 기록
 ```
 
-`apply`와 `update`는 기본적으로 dry-run이다. update는 설치 당시 checksum과 현재 파일, 새 bundle을 비교하며 양쪽이 바뀐 managed 파일에서는 중단한다. 반영 뒤 `projectctl check`가 실패하면 건드린 파일과 install metadata를 복구한다. Project의 제품 코드·데이터·README와 기존 AGENTS 통합 내용은 덮어쓰지 않는다.
+`.harness/*.json`이 v2의 기계 상태 원본이고 `show`, `task show/review`, `decision show`, `promotion show`, `result show`가 사람용 Markdown View를 생성한다. JSON을 직접 편집하지 않는다.
 
-Legacy Project의 최초 `apply/update`는 migration 명령 설치에 필요한 구조·managed config만 `check --installation-only`로 검사한다. 구버전 STATE/History 의미는 다음 migration parity 단계에서 검증한다. V2 authority 전환 뒤에는 full `check`가 canonical JSON을 기준으로 동작하며 보존된 legacy 파일의 예전 표 열이나 history 이름을 새 writer 형식으로 오인하지 않는다.
+각 Project는 자신의 `.harness`, Git history, queue와 Git-local runtime을 소유한다. Harness Engineering 저장소는 bundle을 제공할 뿐 적용 Project를 등록·검색·원격 관리하지 않는다.
 
-## Legacy 상태를 v2로 전환
+## 2. 필요한 환경과 지원 범위
 
-기존 Project는 legacy와 v2를 동시에 쓰지 않고 다음 명시적 단계로 전환한다.
+- Python 3
+- Git과 최초 commit
+- Codex Task를 실행할 경우 Codex CLI
+- local Linux 또는 WSL filesystem
+
+현재 native Windows, NFS, distributed worker와 중앙 dashboard는 지원 범위가 아니다. Task/integration worktree를 만들 수 있도록 Project parent directory에도 쓰기 권한이 필요하다.
+
+## 3. Bundle 만들기와 새 Project 생성
+
+Harness Engineering 저장소 root에서 versioned bundle을 만든다.
 
 ```bash
-python3 tools/projectctl.py migrate inspect
-python3 tools/projectctl.py migrate plan
-python3 tools/projectctl.py migrate apply legacy-to-v2
-python3 tools/projectctl.py migrate verify legacy-to-v2
-python3 tools/projectctl.py migrate switch legacy-to-v2 --harness-version 2.0.0-a1
+python3 tools/harnessctl.py package \
+  --template project \
+  --version 2.0.0-local \
+  --output /tmp/project-harness-2.0.0-local
+```
+
+새 Project 생성은 destination을 새로 만들고 Git과 v2 authority를 초기화한다.
+
+```bash
+python3 tools/harnessctl.py new /absolute/path/to/my-project \
+  --source /tmp/project-harness-2.0.0-local \
+  --project-id my-project \
+  --goal "Project goal" \
+  --scope "Initial scope"
+
+cd /absolute/path/to/my-project
+git add .
+git commit -m "chore: initialize project"
+python3 tools/projectctl.py check
 python3 tools/projectctl.py show project
 ```
 
-`apply`는 side-by-side candidate만 만들고, `verify`의 normalized semantic parity가 100%일 때만 `switch`가 가능하다. v2 mutation 전에는 `migrate rollback legacy-to-v2`로 authority를 되돌릴 수 있다. 기존 문서는 파일럿·보존 기간·복구 훈련이 끝날 때까지 삭제하지 않는다.
+`check`는 template 구조뿐 아니라 v2 canonical record의 schema, digest, internal reference, Result index와 artifact provenance를 검사한다. 형식 통과가 목표 타당성이나 결과 품질을 증명하지는 않는다.
 
-## 수동 v2 Task와 Promotion
+## 4. 기존 Project에 최초 적용
 
-```bash
-python3 tools/projectctl.py task create build-one --goal "Build one" \
-  --scope "One bounded change" --output src/result.py --acceptance "Tests pass" \
-  --owned-path task-output --owned-path handoff.json \
-  --validation-command "python3 -m unittest"
-git add .harness && git commit -m "task: create build-one"
-python3 tools/projectctl.py task start build-one
-```
-
-출력된 worktree에서 작업한 뒤 `handoff.json`에 `status`, `summary`, `findings`, `limitations`, 그리고 `id/source/target/rationale` 후보 목록을 작성한다. Project root에서 다음을 실행한다.
+`apply`는 기본 dry-run이다. 대상 Project를 중앙에 등록하지 않으며 명시된 경로만 검사한다.
 
 ```bash
-python3 tools/projectctl.py task submit build-one --handoff handoff.json
-python3 tools/projectctl.py task review build-one
-git add .harness && git commit -m "task: review build-one"
-python3 tools/projectctl.py promotion prepare --task build-one --candidate <candidate-id>
-python3 tools/projectctl.py promotion show <promotion-id>
-python3 tools/projectctl.py promotion approve <promotion-id> --actor <user-id>
-python3 tools/projectctl.py promotion apply <promotion-id>
+python3 tools/harnessctl.py apply /absolute/path/to/existing-project \
+  --source /tmp/project-harness-2.0.0-local
 ```
 
-`approve`는 표시된 exact diff와 validation evidence에만 유효하다. 승인 후 diff가 바뀌거나 official worktree가 dirty이면 `apply`가 중단된다.
+결과의 `actions`를 검토한다.
 
-## Codex adapter 실행
+- `create`: 없는 파일을 추가한다.
+- `preserve`: Project 소유 또는 integration 파일이 달라 유지한다.
+- `replace`: managed 파일을 bundle 버전으로 교체한다.
+- `conflict`: 자동 반영하지 않는다.
 
-먼저 현재 CLI capability를 확인한다.
+최초 apply에서 기존 `.codex/`, `.agents/`, `tools/`, `tasks/_template/`, `GUIDE.md`, `STRUCTURE.md`가 replace될 수 있다. 별도 backup과 dry-run review 뒤에만 명시적으로 확인한다.
+
+```bash
+python3 tools/harnessctl.py apply /absolute/path/to/existing-project \
+  --source /tmp/project-harness-2.0.0-local \
+  --apply --accept-managed-replace
+```
+
+managed source/target과 parent에 symlink가 있으면 적용을 거부한다. Bundle checksum은 내용 일치를 확인하지만 출처를 인증하지 않으므로 신뢰된 commit에서 만든 bundle만 사용한다.
+
+## 5. 설치된 Project 업데이트
+
+```bash
+python3 tools/harnessctl.py update /absolute/path/to/project \
+  --source /tmp/project-harness-next
+python3 tools/harnessctl.py update /absolute/path/to/project \
+  --source /tmp/project-harness-next --apply
+```
+
+update는 설치 당시 checksum, 현재 Project 파일과 새 bundle을 비교한다. Project와 bundle 양쪽이 바뀐 managed 파일은 conflict로 중단한다. 적용 뒤 Project-local `check`가 실패하면 같은 프로세스가 건드린 파일과 install metadata를 backup에서 복구한다. SIGKILL·host 장애를 넘는 journal이나 임의 과거 version rollback 명령은 제공하지 않으므로 중요한 Project는 Git과 외부 backup을 함께 사용한다.
+
+## 6. Session과 현재 상태 확인
+
+사람이 interactive Project session을 열 때 다음 launcher를 사용할 수 있다.
+
+```bash
+python3 tools/projectctl.py session project
+```
+
+이 launcher는 현재 구현상 full-access/no-approval Codex를 실행한다. 신뢰한 저장소에서만 사용하며 Task adapter의 `workspace-write`와 같은 보안 경계로 오해하지 않는다.
+
+새 세션 또는 컨텍스트 압축 뒤 한 번 현재 상태를 확인한다.
+
+```bash
+python3 tools/projectctl.py context
+```
+
+이 출력의 Project Goal, current objective, Current Tasks와 pending handoff를 운영 상태로 사용한다. lifecycle mutation 뒤 상태가 바뀌었을 때만 다시 실행한다.
+
+## 7. Task 계약 작성
+
+Task 이름은 의미가 드러나는 lowercase kebab-case를 사용한다. 큰 writer Task에는 최소한 scope, output, acceptance, owned path와 validation을 작성한다. 작은 read-only Task는 필요한 필드만 사용한다.
+
+```bash
+python3 tools/projectctl.py task create improve-parser \
+  --goal "Parser 오류 처리를 개선한다" \
+  --scope "src/parser.py와 관련 test만 변경" \
+  --input src/parser.py \
+  --output src/parser.py \
+  --acceptance "관련 test가 통과한다" \
+  --owned-path task-output \
+  --validation-command "python3 -m unittest tests.test_parser"
+
+git add .harness
+git commit -m "task: create improve-parser"
+python3 tools/projectctl.py task show improve-parser
+```
+
+`--input`은 Project-relative UTF-8 file만 받는다. 기본 한도는 파일당 128 KiB, Task 전체 256 KiB다. path, byte와 SHA-256이 계약에 고정되며 start 뒤 파일이 달라지면 Codex 실행을 차단한다. Directory, binary, traversal과 symlink input은 거부한다.
+
+`task show`에서 다음을 확인한다.
+
+- Goal·Scope와 current state
+- input path·size·digest
+- outputs, dependencies와 context references
+- owned write paths와 acceptance
+- validation argv
+- 요청한 model, reasoning, sandbox, web/network, tools·MCP·skills와 budget
+
+Task 유형별 공통 원칙:
+
+| 유형 | 계약에서 명확해야 할 것 | 부모 review |
+| --- | --- | --- |
+| 코드 | 수정 경로, compatibility, test/build | diff, regression, scope, validation log |
+| 문서 | 독자, authority source, 필수 section | 주장 근거, link·구조, 읽기 흐름 |
+| 연구 | 질문, source policy, recency, 포함/제외 | source 품질, claim 근거, 모순과 한계 |
+
+별도 generic profile을 강제하지 않는다. 같은 계약이 여러 Project에서 반복될 때만 Project-local scoped Skill로 승격한다.
+
+## 8. 수동 worktree Task
+
+Task contract를 commit한 뒤 격리 worktree를 만든다.
+
+```bash
+python3 tools/projectctl.py task start improve-parser
+```
+
+출력된 worktree에서 작업한다. Handoff JSON은 다음 필드를 가진다.
+
+```json
+{
+  "status": "completed",
+  "summary": "What changed and why",
+  "findings": ["Important observation"],
+  "limitations": ["Known limitation"],
+  "candidates": [
+    {
+      "id": "parser-change",
+      "source": "task-output/parser.py",
+      "target": "src/parser.py",
+      "rationale": "Acceptance evidence"
+    }
+  ]
+}
+```
+
+Candidate source와 target은 worktree/repository 안의 non-symlink relative path여야 한다. 제출은 전체 changed path ownership을 검사하고 validation을 실행한다.
+
+```bash
+python3 tools/projectctl.py task submit improve-parser --handoff handoff.json
+python3 tools/projectctl.py task review improve-parser
+git add .harness
+git commit -m "task: review improve-parser"
+```
+
+`task review`에서 summary, findings, limitations, acceptance, changed paths, candidates와 validation full-log 경로를 확인한다. Validation은 shell string이 아니라 argv로 실행되고 명령별 기본 300초 timeout을 가진다. Full log는 Git-local이고 canonical handoff에는 tail, digest와 경로만 남는다.
+
+## 9. Codex adapter Task
+
+실행 전 capability를 확인한다.
 
 ```bash
 python3 tools/projectctl.py doctor codex
 ```
 
-Codex Task 생성 시 실행 계약을 함께 기록한다.
-
 ```bash
-python3 tools/projectctl.py task create agent-one --goal "Implement one change" \
-  --scope "Only the named module" --input src/existing.py \
-  --output src/change.py --acceptance "Tests pass" \
-  --owned-path task-output --validation-command "python3 -m unittest" --codex \
-  --model gpt-5.6 --reasoning-effort high --reasoning-fallback medium \
-  --sandbox workspace-write --approval-policy never --web-mode disabled \
-  --no-network-access --allowed-tool shell --allowed-tool apply_patch \
-  --time-limit 3600 --token-limit 200000 --agent-role implementation
-git add .harness && git commit -m "task: create agent-one"
-python3 tools/projectctl.py task start agent-one
-python3 tools/projectctl.py task run agent-one
+python3 tools/projectctl.py task create agent-parser \
+  --goal "Implement parser change" \
+  --scope "Only parser and tests" \
+  --input src/parser.py \
+  --output src/parser.py \
+  --acceptance "Parser tests pass" \
+  --owned-path task-output \
+  --validation-command "python3 -m unittest tests.test_parser" \
+  --codex \
+  --model gpt-5.6 \
+  --reasoning-effort high \
+  --reasoning-fallback medium \
+  --sandbox workspace-write \
+  --approval-policy never \
+  --web-mode disabled \
+  --no-network-access \
+  --allowed-tool shell \
+  --allowed-tool apply_patch \
+  --time-limit 3600 \
+  --token-limit 200000 \
+  --agent-role implementation
+
+git add .harness
+git commit -m "task: create agent-parser"
+python3 tools/projectctl.py task start agent-parser
+python3 tools/projectctl.py task run agent-parser
 ```
 
-Reasoning fallback은 adapter가 지원값을 고른 뒤 실제 `-c model_reasoning_effort=...`로 전달한다. 요청값, 적용값, fallback, argv, thread id, JSONL events와 usage는 Git-local run evidence에 기록된다. Sandbox·approval·web·network와 발견된 Project skill·MCP 설정은 CLI config로 제어하지만 shell 하위 동작의 allowlist를 강한 보안 경계로 간주하지 않는다.
+Adapter는 reasoning effort를 prompt 문구가 아니라 Codex CLI config로 전달한다. requested/effective contract, fallback, argv, thread, JSONL events와 usage를 Git-local run evidence에 기록한다.
 
-`--input`은 Project-relative UTF-8 file만 받는다. 기본 제한은 파일당 128 KiB, Task 전체 256 KiB이며 content는 bounded prompt에, path·SHA-256·bytes는 Task와 run evidence에 기록된다. Task 생성 뒤 input이 바뀌면 실행을 차단하므로 변경된 source에는 새 계약이 필요하다. Directory, binary, traversal과 제한 초과 입력은 허용하지 않는다.
+실제 enforcement를 구분한다.
 
-## Decision과 Result 재사용
+- hard: Codex sandbox, wall-time, structured output
+- CLI config: approval, web mode, workspace-write network, MCP, Project skill, view image, multi-agent
+- Agent policy/audit: shell과 apply_patch 선언
+- post-run: token ceiling
 
-Task가 `needs_decision`이면 해당 Task만 기다린다.
+`danger-full-access + network_access=false`는 network 격리를 약속할 수 없어 adapter가 거부한다. Timeout/cancel은 Codex process group을 종료한다. 부모 environment는 현재 상속하므로 secret-bearing host에서는 별도 container 또는 최소 환경으로 실행한다.
+
+추가 권한, 외부 변경이나 scope 확대가 필요하면 Task는 `needs_decision`을 반환해야 한다. Adapter가 permission 계열 실패를 감지해도 자동 권한 상승하지 않는다.
+
+## 10. Decision
 
 ```bash
 python3 tools/projectctl.py decision show <decision-id>
@@ -96,365 +250,197 @@ python3 tools/projectctl.py decision resolve <decision-id> \
   --choice <option-id> --actor <user-id> --note "Reason"
 ```
 
-이전 결과는 검증 상태와 함께 최소 index에 추가한다.
+View는 이유, option별 영향, 권고, safe default와 보류 가능성을 보여준다. Resolve는 canonical Task를 active 또는 blocked로 바꾸지만 queue job은 자동 재실행하지 않는다. Queue에서 실행하던 Task는 상태·worktree를 확인한 뒤 별도로 `queue resume`한다. 다른 독립 Task는 계속 진행한다.
+
+## 11. Queue와 background worker
+
+Codex execution contract가 있는 ready Task를 commit한 뒤 enqueue한다.
 
 ```bash
-python3 tools/projectctl.py result add parser-experiment --kind experiment \
-  --summary "Parser fixture passed" --source-ref task:parser-research \
-  --artifact-ref docs/parser-result.md --verification-status verified --reusable
-python3 tools/projectctl.py result list
-python3 tools/projectctl.py result show parser-experiment
-```
-
-후속 Task 생성 시 `--context-ref result:parser-experiment`를 사용하면 adapter가 digest와 필요한 요약만 context에 넣는다.
-
-## Queue와 background worker
-
-Codex 실행 계약을 가진 ready Task를 commit한 뒤 queue에 넣는다.
-
-```bash
-python3 tools/projectctl.py queue enqueue task-one
-python3 tools/projectctl.py queue enqueue task-two
+python3 tools/projectctl.py queue enqueue reader-one
+python3 tools/projectctl.py queue enqueue reader-two
 python3 tools/projectctl.py queue list
-python3 tools/projectctl.py worker start --max-parallel 2 --max-writers 1
 ```
 
-`worker start`는 detached coordinator를 시작하고 Git-local log 경로를 반환하지만 PID를 영구 상태로 저장하거나 다음 worker가 adopt하지 않는다. Foreground 또는 1회 실행은 다음과 같다.
+처음에는 foreground worker로 상태를 관찰한다.
 
 ```bash
 python3 tools/projectctl.py worker run --max-parallel 2 --max-writers 1
-python3 tools/projectctl.py worker run --once
+```
+
+안정된 Project에서는 detached coordinator를 시작할 수 있다.
+
+```bash
+python3 tools/projectctl.py worker start --max-parallel 2 --max-writers 1
+python3 tools/projectctl.py queue status reader-one
+python3 tools/projectctl.py queue cancel reader-one
 python3 tools/projectctl.py worker stop
 ```
 
-상태 확인과 개별 제어:
+Queue는 `.git/harness/v2/queue.sqlite3`에 current job state만 보존한다. Codex subprocess와 validation은 병렬 실행할 수 있지만 canonical JSON의 짧은 mutation만 Project-local lock과 revision compare-and-swap으로 직렬화한다.
+
+Worker 재시작은 남은 running job을 `interrupted`로 표시할 뿐 PID를 adopt하거나 자동 retry하지 않는다. 다음을 확인하기 전 resume하지 않는다.
+
+1. 이전 worker와 Codex descendant가 살아 있지 않은가.
+2. Task worktree의 `git status`와 diff는 무엇인가.
+3. pending Decision과 최신 run evidence가 있는가.
+4. 같은 workspace에 새 attempt가 겹치지 않는가.
 
 ```bash
-python3 tools/projectctl.py queue status task-one
-python3 tools/projectctl.py queue cancel task-one
-python3 tools/projectctl.py queue resume task-one
+python3 tools/projectctl.py queue resume <task-id>
 ```
 
-Running cancel은 adapter가 주기적으로 queue flag를 확인해 Codex subprocess를 종료한다. Worker가 비정상 종료되면 다음 시작에서 이전 running을 interrupted로 표시할 뿐 자동 복구하지 않는다. 잔존 Codex 프로세스, worktree diff와 Decision을 확인하기 전에는 resume하지 않는다. 한 Task가 `needs_decision` 또는 `blocked`여도 독립 Task는 계속 실행한다.
+Queue `succeeded`는 review 가능한 handoff가 생겼다는 뜻이지 Promotion 승인이 아니다.
 
-Queue 작업 후 `.harness` canonical 변경을 parent Agent가 검토하고 commit해야 한다. Queue의 `succeeded`는 handoff 회수 성공이며 Promotion 승인이 아니다.
+## 12. Result 기록과 재사용
 
-이 가이드는 공용 템플릿으로 새 Project를 만들고, 사람이 Project 세션과 Task 세션을 전환하면서 독립 작업 결과를 공식 Project로 Promotion하는 전체 절차를 설명한다.
-
-## 운영 모델
-
-Project는 공식 코드·데이터·문서와 현재 목표를 관리한다. Task는 Project 목표를 수행하기 위한 하나의 서브 작업, 실험 또는 리서치를 독립 공간에서 수행한다.
-
-```text
-Project 목표와 Current Goal 설정
-→ Task 계약 작성·활성화·기준점 저장
-→ 사람이 Task 세션으로 전환
-→ Task 수행·검증·REPORT 작성
-→ 사람이 Project 세션으로 복귀
-→ handoff 검토·감사·종료
-→ 사람이 필요한 결과와 공식 위치를 판단
-→ 선택 결과만 Promotion·검증·기록
-```
-
-Project Agent와 Task Agent는 대화 컨텍스트를 공유한다고 가정하지 않는다. `TASK.md`와 `STATUS.md`가 Task 세션의 입력 계약이고, 완료된 `REPORT.md`가 Project 세션으로 돌아오는 handoff다.
-
-### 사람 판단과 도구의 경계
-
-사람과 Agent가 판단한다.
-
-- Project 목표와 Current Goal
-- Task의 Final Goal, Scope, Workflow, 완료 기준
-- 조사·실험 설계와 결과 해석
-- 결과의 가치, Promotion 여부와 공식 반영 위치
-- ADR 필요성
-- Project/Task 세션 전환과 subagent 사용 허용
-
-`projectctl`은 기계적으로 판정 가능한 절차만 수행한다.
-
-- Project 구조와 정해진 Markdown 형식 검사
-- Task scaffold, 선택 코드 snapshot, 공식 데이터 symlink
-- 상태 전이와 REPORT 완성도 검사
-- Git 기준점과 linked data checksum 저장
-- Task 경계 밖 변경 감사
-- 종료 History와 이미 내려진 Promotion 결정 기록
-- 내용 없는 Hook 메타데이터 목록과 보고서 생성
-
-형식 검사를 통과해도 목표의 타당성, 결과 해석 또는 Promotion 가치는 증명되지 않는다.
-
-## 실행 전 조건
-
-Python 3, Git, Codex CLI가 필요하다. Project는 Git 저장소여야 하며 Task 기준점을 만들기 전에 적어도 하나의 commit과 깨끗한 worktree가 필요하다.
-
-세션 런처는 현재 환경에 맞춰 network를 허용하고 `--dangerously-bypass-approvals-and-sandbox`로 Codex를 실행한다. bubblewrap sandbox나 auto-review에 의존하지 않는다.
-
-- full-access는 신뢰한 저장소에서만 사용한다.
-- Task 경계는 Git diff와 checksum으로 사후 감사하며 쓰기 보안 경계가 아니다.
-- custom agent의 비수정 지시는 행동 규칙이지 시스템 권한 제한이 아니다.
-- Hook은 작업을 차단하지 않는 관찰 장치이며 완전한 보안 감사를 보장하지 않는다.
-
-## 새 Project 만들기
-
-Harness Engineering 저장소에서 공용 템플릿을 복사한다.
+Result는 범용 evidence graph가 아니다. 후속 Task가 발견할 가치가 있는 실험·실패·review·결정·asset만 기록한다.
 
 ```bash
-python3 tools/create_project.py /absolute/path/to/new-project
-cd /absolute/path/to/new-project
+python3 tools/projectctl.py result add parser-experiment \
+  --kind experiment \
+  --summary "Parser fixture passed" \
+  --source-ref task:parser-research \
+  --artifact-ref docs/parser-result.md \
+  --verification-status verified \
+  --reviewed-by parent-agent \
+  --verification-note "Fixture and report reviewed" \
+  --reusable
 ```
 
-생성 도구는 기존 목적지를 덮어쓰지 않는다. 숨김 설정을 포함한 템플릿을 복사하고 Git을 초기화한 뒤 구조를 검사한다.
-
-1. `PROJECT.md`의 Goal과 Scope를 작성한다.
-2. `STATE.md`의 Current Goal을 작성한다. Current Tasks는 비워 둔다.
-3. 사람용 소개가 필요하면 `README.md`의 Project Introduction을 작성한다.
-4. 구조를 검사하고 최초 commit을 만든다.
+`reviewed` 또는 `verified` Result는 reviewer와 source 또는 artifact evidence가 필요하다. Artifact는 존재하는 Project-relative non-symlink file이어야 하며 path, byte와 SHA-256을 기록한다.
 
 ```bash
+python3 tools/projectctl.py result list --kind experiment --reusable
+python3 tools/projectctl.py result list --verification-status verified --text parser
+python3 tools/projectctl.py result show parser-experiment
+```
+
+Index가 손상되거나 record와 어긋나면 canonical Result records에서 재생성한다.
+
+```bash
+python3 tools/projectctl.py result rebuild
 python3 tools/projectctl.py check
-git add .
-git commit -m "chore: initialize project"
 ```
 
-`PROJECT.md`는 안정적인 프로젝트 정의이고 `STATE.md`는 현재 Goal과 현재 Task만 보관한다. 두 파일을 진행 로그로 사용하지 않는다.
+후속 Task는 `--context-ref result:parser-experiment`를 사용한다. Adapter는 digest, summary, verification과 artifact path metadata만 주입하며 artifact 전체 내용은 명시 input으로 별도 선택해야 한다. Superseded, rejected 또는 Project에 맞지 않는 Result를 관성적으로 재사용하지 않는다.
 
-## Hook 검토와 Project 세션
+## 13. Promotion
 
-공용 템플릿은 `.codex/hooks.json`에서 관찰 Hook을 등록한다. 처음 저장소를 신뢰할 때 Hook 명령과 `.codex/hooks/observe.py`를 직접 검토하고 Codex의 `/hooks` 화면에서 상태를 확인한다. 일반 세션 런처는 Hook trust를 우회하지 않는다.
-
-사람이 Project 세션을 연다.
+Parent Agent가 handoff와 candidate를 검토하고 사용자가 공식 반영할 candidate를 선택한 뒤 packet을 만든다. Official worktree와 `.harness`는 clean해야 한다.
 
 ```bash
-python3 tools/projectctl.py session project
+python3 tools/projectctl.py promotion prepare \
+  --task improve-parser --candidate parser-change
+python3 tools/projectctl.py promotion show <promotion-id>
 ```
 
-런처는 Project 역할과 관찰 run ID를 전달한다. 새 세션 또는 컨텍스트 압축 뒤에는 한 번 실행한다.
+`promotion show`에서 반드시 확인한다.
+
+- Task와 selected candidate
+- exact base commit
+- diff와 validation digest
+- validation exit와 full-log 경로
+- 실제 exact diff 본문
+
+안전하고 위임된 여러 candidate는 한 packet으로 묶을 수 있다. 다른 가치 판단이나 서로 독립된 위험을 가진 변경은 별도 packet을 사용한다.
 
 ```bash
-python3 tools/projectctl.py context
+python3 tools/projectctl.py promotion approve <promotion-id> --actor <user-id>
+python3 tools/projectctl.py promotion show <promotion-id>
+python3 tools/projectctl.py promotion apply <promotion-id>
 ```
 
-출력에는 Project Goal, Scope, Current Goal, 현재 Task 상태, 종료 대기 handoff와 source digest가 포함된다. 같은 세션에서 source가 바뀌지 않았다면 같은 문서를 다시 읽을 필요가 없다.
+Approve는 current base·Task·diff를 확인하고 validation을 새로 실행해 승인 subject에 결속한다. Apply도 official HEAD가 같은 base인지 확인하고 즉시 validation을 다시 통과한 경우에만 cherry-pick한다. Base, Task contract, diff나 approval subject가 바뀌면 기존 packet을 재사용하지 말고 새로 prepare한다.
 
-## Task 설계와 생성
+Apply 중 cherry-pick 또는 두 번째 canonical record commit이 실패하면 자동 rollback journal은 없다. `git status`, cherry-pick 상태, candidate commit과 `.harness/promotions`를 확인해 forward repair하고, 불명확하면 Project를 변경하지 말고 중단한다.
 
-Task 이름은 숫자 ID 대신 의미가 드러나는 lowercase kebab-case를 사용한다. 예: `compare-parser-strategies`, `normalize-csv-input`.
+## 14. Observability와 Hooks
 
-```bash
-python3 tools/projectctl.py task create normalize-csv-input \
-  --goal "CSV 입력을 정규화하는 구현과 검증 근거를 작성한다."
-```
-
-필요한 공식 코드는 생성 시 Task `scripts/`로 복사하고, 공식 데이터는 Task `data/`에 symlink로 연결할 수 있다. 옵션은 반복 가능하다.
-
-```bash
-python3 tools/projectctl.py task create evaluate-model \
-  --goal "기존 평가 코드를 기준 데이터로 검증한다." \
-  --copy-code src/evaluate.py evaluate.py \
-  --copy-code tools/report.py report.py \
-  --link-data data/benchmark benchmark
-```
-
-코드 원본은 `src/` 또는 `tools/`, 데이터 원본은 `data/` 안에 있어야 한다. 복사 코드는 Task snapshot이고 symlink 데이터는 공식 원본이므로 Task가 수정하지 않는다.
-
-생성 직후 `tasks/<task-name>/TASK.md`를 작성한다.
-
-- Scope: 이 Task가 다루는 범위
-- Inputs/Data: 사용할 snapshot, link, 문서 또는 근거
-- Workflow: 수행 순서
-- Outputs: Task 내부에 생성할 결과
-- Completion Criteria: 종료를 판단할 검증 가능한 조건
-
-`STATUS.md`에는 Final Goal, Work Plan, Current Work와 현재 Status만 둔다. 상태 로그나 장문의 결과를 쌓지 않는다.
-
-계약을 작성한 뒤 확인·활성화·기준점 저장을 수행한다.
-
-```bash
-python3 tools/projectctl.py context --task normalize-csv-input
-python3 tools/projectctl.py task validate normalize-csv-input --phase ready
-python3 tools/projectctl.py task activate normalize-csv-input
-git add STATE.md tasks/normalize-csv-input
-git commit -m "chore: activate normalize csv task"
-python3 tools/projectctl.py task baseline normalize-csv-input
-```
-
-`baseline`은 worktree가 깨끗할 때만 성공한다. 기준 commit과 checksum은 `.git/harness/`에 저장되며 공식 산출물이 아니다.
-
-## Task 세션 수행
-
-Project 세션을 종료한 뒤 사람이 Task 세션을 연다.
-
-```bash
-python3 tools/projectctl.py session task normalize-csv-input
-```
-
-Task 작업 디렉터리에서 새 세션 또는 컨텍스트 압축 뒤 한 번 실행한다.
-
-```bash
-python3 ../../tools/projectctl.py context
-```
-
-Task Agent는 context의 Final Goal, Work Plan, Current Work, 계약과 REPORT 형식을 handoff로 사용한다. 조사, 구현, 실험, 메모와 임시 산출물은 Task 계약이 지정한 위치에 둔다.
-
-- `scripts/`: snapshot과 Task 실행·실험 코드
-- `data/`: 공식 데이터 symlink
-- `docs/research/`: 외부 조사 근거
-- `docs/notes/`: 수행 메모
-- `output/`: Task 결과
-
-현재 Work가 바뀔 때만 `STATUS.md`를 갱신한다. doing Task에는 정확히 하나의 doing Work가 있어야 하며 Current Work가 그 이름과 같아야 한다.
-
-완료할 때 다음을 정리한다.
-
-1. 산출물과 관련 검증을 완료한다.
-2. `REPORT.md`에 Outcome, 목표 대비 결과, 핵심 발견, 검증, Relevant Files, 한계와 후속 검토를 작성한다.
-3. Work Plan을 모두 completed로, Current Work를 `None`으로, Task Status를 completed로 바꾼다.
-4. 종료 형식을 검사하고 Task 세션을 멈춘다.
-
-```bash
-python3 ../../tools/projectctl.py task validate normalize-csv-input --phase completed
-```
-
-계속하지 않기로 한 Task는 REPORT에 중지 결과와 재사용 가능한 근거를 남기고 Status를 stopped로 바꾼다. doing Work를 남기지 않고 Current Work를 `None`으로 만든 뒤 `--phase stopped`로 검증한다.
-
-## Project handoff와 Task 종료
-
-사람이 Project 세션으로 돌아온다.
-
-```bash
-python3 tools/projectctl.py session project
-python3 tools/projectctl.py context
-python3 tools/projectctl.py task status
-```
-
-완료 또는 중지 Task는 Project=`doing`, Task=`completed|stopped`로 표시된다. close 전에 정규화된 handoff와 경계를 확인한다.
-
-```bash
-python3 tools/projectctl.py task handoff normalize-csv-input --json
-python3 tools/projectctl.py task audit normalize-csv-input
-python3 tools/projectctl.py task close normalize-csv-input
-git add STATE.md docs/history tasks/normalize-csv-input
-git commit -m "chore: close normalize csv task"
-```
-
-`audit`은 기준점 이후 Task 밖 변경과 linked data 변경을 검사한다. 실패하면 자동 복구하지 말고 `git diff`와 원본 데이터를 확인한다.
-
-completed Task는 Current Goal이 유지되는 동안 STATE에 completed로 남는다. stopped Task는 STATE에서 제거되고 History에만 남는다. Task 디렉터리와 REPORT는 증거로 보존한다. 재시도는 새 목표가 드러나는 새 이름의 Task로 만든다.
-
-## Promotion
-
-Task close와 Promotion은 별도 단계다. completed는 검토 가능 상태일 뿐 자동 Promotion 신호가 아니다.
-
-사람이 REPORT와 Relevant Files를 바탕으로 결과 가치, 공식 위치, 필요한 Project 검증과 ADR 필요성을 결정한다.
-
-| 결과 | 공식 위치 |
-| --- | --- |
-| 제품·라이브러리·런타임 코드 | `src/` |
-| 반복 사용하는 개발·운영 도구 | `tools/` |
-| 검증된 공식 데이터와 metadata README | `data/` |
-| 사용자·설계·운영 문서 | `docs/` 또는 책임이 정해진 루트 문서 |
-| 장기 구조 결정과 이유 | `docs/adr/<decision-name>.md` |
-| Task 종료·Promotion 사건 | `docs/history/`의 도구 생성 기록 |
-
-필요한 결과만 공식 위치에 적용하고 관련 테스트와 구조 검사를 실행한다. 그 뒤 이미 내린 결정을 기록한다.
-
-```bash
-python3 tools/projectctl.py check
-python3 tools/projectctl.py promotion record normalize-csv-input \
-  --decision promoted \
-  --path src/csv_normalizer.py \
-  --path docs/csv-normalization.md
-git add src docs
-git commit -m "feat: promote csv normalization result"
-```
-
-공식 반영 가치가 없는 결과는 파일을 만들지 않고 기록한다.
-
-```bash
-python3 tools/projectctl.py promotion record normalize-csv-input \
-  --decision not-promoted
-```
-
-`promotion record`는 파일을 복사하거나 가치를 판단하지 않는다. completed History의 결정을 한 번만 갱신한다. ADR 파일명에는 날짜를 넣지 않는다.
-
-## Skills와 subagent
-
-공용 Skills는 자연어 요청에 자동 호출되지 않는다.
-
-- `$manage-project-workflow`: 사용자가 선택한 Project lifecycle checkpoint만 실행
-- `$run-task-workflow`: 현재 Task 계약 수행과 REPORT handoff 준비
-
-두 Skill의 `allow_implicit_invocation`은 false다. 반복 명령을 줄이는 보조 절차이며 Goal, 해석, Promotion 판단 또는 세션 전환을 대신하지 않는다.
-
-기본은 단일 Agent다. 서로 독립적인 읽기 작업이라 병렬 이점이 분명하고, 부모 컨텍스트 오염 가능성이 낮으며, 역할·범위·추가 비용을 확인한 경우에만 사용자가 subagent를 허용한다.
-
-`research_reader`와 `verification_reader`는 각각 제한된 근거 수집과 독립 검증을 위한 설정이다. 파일 수정, lifecycle 명령, 범위 확장, 재위임을 지시상 금지하지만 full-access 환경에서 권한 차단을 제공하지 않는다.
-
-## 관찰 보고서
-
-`projectctl session`으로 연 세션은 Git-local run ID를 가진다. Hook, context와 명시적 Skill marker는 다음 위치에 내용 없는 JSONL metadata로 누적된다.
-
-```text
-.git/harness/observability/<run-id>/events.jsonl
-```
+`.codex/hooks.json`과 `.codex/hooks/observe.py`를 신뢰하기 전에 직접 검토한다. Hook은 항상 성공을 반환하는 fail-open 관찰 장치다.
 
 ```bash
 python3 tools/projectctl.py observe list
 python3 tools/projectctl.py observe report --latest
 ```
 
-기본 보고서는 `.harness/observability/<run-id>/REPORT.md`와 `summary.json`에 생성된다. Hook event coverage, Markdown path 방문 횟수, context와 lifecycle, Skill marker, compaction, subagent start/stop, 역할별 이벤트와 timeline을 확인할 수 있다.
+Git-local event는 prompt·tool output·patch 전체가 아닌 최소 metadata를 기록한다. Coverage 누락은 “행동이 없었다”는 증거가 아니다. Raw Codex JSONL은 prompt와 Agent message를 포함할 수 있으므로 자동 공개하지 않는다.
 
-Hook은 사용자 프롬프트, 도구 출력, patch 본문, 전체 shell 명령을 기록하지 않는다. 그러나 모든 동작을 완전히 관찰할 수 없으며 누락 event는 “동작이 없었다”는 증거가 아니다. 실험 raw Codex JSONL은 프롬프트와 Agent 메시지를 포함할 수 있어 자동 공개하지 않는다.
+## 15. Legacy Project migration
 
-## 결과 검토 순서
+기존 Markdown lifecycle Project에 bundle을 먼저 설치한 뒤 authority를 side-by-side로 변환한다. 표준 `PROJECT.md`, `STATE.md`, 완전한 Task `TASK/STATUS/REPORT`와 History가 지원 범위다. Custom/partial Task와 표준 밖 파일은 사람이 별도 inventory로 대조한다.
 
-가장 적은 컨텍스트로 다음 순서대로 본다.
+```bash
+python3 tools/projectctl.py migrate inspect
+python3 tools/projectctl.py migrate plan
+python3 tools/projectctl.py migrate apply legacy-to-v2
+python3 tools/projectctl.py migrate verify legacy-to-v2
+python3 tools/projectctl.py migrate switch legacy-to-v2 --harness-version 2.0.0-local
+python3 tools/projectctl.py check
+python3 tools/projectctl.py show project
+```
 
-1. `PROJECT.md`: 안정적인 Goal과 Scope
-2. `STATE.md`: Current Goal과 현재 Task
-3. 검토 대상 Task의 `REPORT.md`
-4. REPORT의 Relevant Files와 실제 테스트 결과
-5. 공식 영역의 `git diff`와 관련 테스트
-6. `docs/history/`의 종료·Promotion 기록
-7. 필요할 때만 `docs/adr/`의 장기 결정
-8. `.harness/observability/.../REPORT.md`의 행동·coverage 집계
-9. 문제 조사에 꼭 필요할 때만 Git-local event 또는 실험 raw JSONL
+`apply`는 candidate만 만들고 `verify`는 candidate record schema/digest와 normalized semantic parity를 검사한다. Source file·Task·History 수를 별도 inventory와 대조한다. v2 mutation 전에는 다음 rollback이 가능하다.
 
-Task의 전체 수행 메모는 기본 검토 대상이 아니다. REPORT와 Relevant Files만으로 판단이 부족할 때 제한적으로 확인한다.
+```bash
+python3 tools/projectctl.py migrate rollback legacy-to-v2
+```
 
-## 장애 대응
+v2 mutation 뒤에는 legacy authority로 되돌리지 않고 forward repair한다. 보존 기간과 복구 훈련이 끝나고, 실제 Project pilot에서 semantic parity와 새 workflow가 확인되기 전에는 legacy 원본을 삭제하지 않는다.
 
-- baseline 실패: `git status --short`로 활성화 변경이 commit됐고 worktree가 깨끗한지 확인한다.
-- audit의 Project 변경: 자동으로 되돌리지 말고 변경 주체와 필요성을 확인한다.
-- Project=`doing`, Task=`completed|stopped`: 정상 handoff 구간이며 Project에서 handoff, audit, close한다.
-- Hook event 없음: `projectctl session` 사용, Hook trust, `/hooks` 활성 상태를 확인한다. Hook은 fail-open이다.
-- observe report 실패: `observe list` 뒤 `--latest` 또는 정확한 run ID를 지정한다.
-- Task 세션의 lifecycle 거부: 사람이 Project 세션으로 돌아와 실행한다.
+Migration 전 legacy Task lifecycle이 필요한 경우에만 `task activate|baseline|validate|handoff|audit|close`와 `promotion record`를 사용한다. V2 switch 뒤 legacy writer는 split-brain 방지를 위해 거부된다.
 
-## 최소 체크리스트
+## 16. 문제 진단 순서
+
+1. `python3 tools/projectctl.py check`
+2. `python3 tools/projectctl.py show project`
+3. 해당 `task show`와 `task review`
+4. pending `decision show` 또는 `queue status`
+5. `promotion show`의 base·diff·validation
+6. 공식 worktree와 Task/integration worktree의 `git status`·diff
+7. Git-local validation/run log
+8. 필요할 때만 Hook raw event
+
+대표 오류:
+
+- `canonical record changed concurrently`: stale writer가 감지됐다. 최신 View를 다시 읽고 작업을 재시도한다.
+- `official HEAD changed`: 기존 Promotion packet을 버리고 최신 HEAD에서 prepare한다.
+- `managed replacements require`: dry-run replace와 backup을 검토한 뒤 최초 apply에 확인 flag를 사용한다.
+- `symlink is not allowed` 또는 `Task path contains a symlink`: 실제 파일을 Project 안의 정상 경로로 옮긴다.
+- `token limit exceeded`: 이미 사용량이 발생한 뒤의 ceiling 판정이다. 다음 Task scope/input/model을 줄인다.
+- `interrupted`: 자동 resume하지 말고 process와 worktree부터 확인한다.
+
+## 17. 최소 운영 체크리스트
 
 Project 시작:
 
-- `PROJECT.md`, `STATE.md` 작성
-- `projectctl check` 통과와 최초 commit
-- Hook 명령 검토와 trust
+- trusted bundle과 dry-run 확인
+- `check`, Project View와 최초 commit
+- Hook 명령·trust 확인
 
 Task 시작:
 
-- 의미 있는 이름과 Final Goal
-- TASK 계약과 STATUS Work Plan 완성
-- validate ready → activate → commit → baseline
-- 사람이 Task 세션으로 전환
+- bounded goal/scope/input/output/acceptance
+- writer면 owned path와 validation
+- Task contract commit 뒤 start 또는 enqueue
+- Task View에서 requested contract 확인
 
-Task 종료:
+Task 검토:
 
-- 결과 검증, REPORT, completed 또는 stopped STATUS
-- validate completed/stopped
-- 사람이 Project 세션으로 복귀
-- handoff → audit → close → commit
+- summary, findings, limitations와 acceptance 연결
+- changed paths·candidate·validation full log
+- effective Codex contract와 fallback
+- 필요한 Decision만 해당 Task에서 해결
 
 Promotion:
 
-- 사람이 가치와 공식 경로 결정
-- 필요한 결과만 반영
-- 관련 검증과 `projectctl check`
-- `promotion record`와 commit
+- clean official base
+- actual exact diff와 fresh validation
+- candidate 선택 범위와 rollback/forward-repair 계획
+- apply 뒤 official file, canonical Promotion과 `check`
+
+Result:
+
+- 실제 재사용 가치
+- source/artifact와 reviewer
+- verification·reusable·supersedes 상태

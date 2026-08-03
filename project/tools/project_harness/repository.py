@@ -2,15 +2,20 @@
 
 from __future__ import annotations
 
+import fcntl
 import re
 import subprocess
+import threading
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Sequence
+from typing import Iterator, Sequence
 
 from .errors import HarnessError
 
 
 TASK_NAME = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
+_CANONICAL_THREAD_LOCK = threading.RLock()
+_CANONICAL_LOCK_STATE = threading.local()
 
 
 def run_command(root: Path, argv: Sequence[str]) -> str:
@@ -70,6 +75,66 @@ def relative_source(root: Path, raw: str, allowed: Sequence[str]) -> Path:
 def safe_relative(raw: str) -> Path:
     """Return a relative destination path that cannot traverse its base directory."""
     path = Path(raw)
-    if path.is_absolute() or ".." in path.parts:
+    if not raw or path.is_absolute() or ".." in path.parts:
         raise HarnessError("invalid Task destination: " + raw)
     return path
+
+
+def contained_path(base: Path, raw: str, must_exist: bool = False) -> Path:
+    """Return a non-symlink path contained by ``base``.
+
+    Lexical relative-path checks alone are insufficient because an existing
+    parent symlink can redirect a later read or copy outside the Project.
+    """
+    relative = safe_relative(raw)
+    resolved_base = base.resolve()
+    candidate = resolved_base / relative
+    cursor = resolved_base
+    for part in relative.parts:
+        cursor /= part
+        if cursor.is_symlink():
+            raise HarnessError("Task path contains a symlink: " + raw)
+    try:
+        candidate.resolve(strict=False).relative_to(resolved_base)
+    except ValueError as error:
+        raise HarnessError("Task path escapes its root: " + raw) from error
+    if must_exist and not candidate.is_file():
+        raise HarnessError("Task file does not exist: " + raw)
+    return candidate
+
+
+@contextmanager
+def canonical_state_lock(root: Path) -> Iterator[None]:
+    """Serialize canonical-state mutation across threads and local processes.
+
+    The lock is re-entrant in one thread so high-level mutations can safely
+    call smaller mutation helpers without deadlocking on a second ``flock``.
+    """
+    with _CANONICAL_THREAD_LOCK:
+        path = git_dir(root) / "harness/v2/canonical.lock"
+        key = str(path.resolve())
+        held = dict(getattr(_CANONICAL_LOCK_STATE, "held", {}))
+        if key in held:
+            held[key] += 1
+            _CANONICAL_LOCK_STATE.held = held
+            try:
+                yield
+            finally:
+                held = dict(getattr(_CANONICAL_LOCK_STATE, "held", {}))
+                held[key] -= 1
+                if not held[key]:
+                    held.pop(key)
+                _CANONICAL_LOCK_STATE.held = held
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a+") as handle:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            held[key] = 1
+            _CANONICAL_LOCK_STATE.held = held
+            try:
+                yield
+            finally:
+                held = dict(getattr(_CANONICAL_LOCK_STATE, "held", {}))
+                held.pop(key, None)
+                _CANONICAL_LOCK_STATE.held = held
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)

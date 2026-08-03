@@ -91,7 +91,7 @@ class LegacyCompatibilityTest(unittest.TestCase):
 
         applied = self.command(
             "python3", str(HARNESSCTL), "apply", str(root),
-            "--source", str(self.bundle), "--apply",
+            "--source", str(self.bundle), "--apply", "--accept-managed-replace",
         )
         self.assertTrue(json.loads(applied.stdout)["applied"])
         self.assertEqual(

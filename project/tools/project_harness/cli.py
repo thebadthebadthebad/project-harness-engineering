@@ -56,6 +56,7 @@ from .v2 import (
     migration_verify,
     prepare_promotion,
     list_results,
+    rebuild_result_index,
     render_decision,
     render_handoff_review,
     render_project,
@@ -288,13 +289,23 @@ def result_add_command(args: argparse.Namespace) -> None:
         add_result(
             _root(args), args.result_id, args.kind, args.summary, args.source_ref or [],
             args.artifact_ref or [], args.verification_status, args.reusable, args.supersedes,
+            args.reviewed_by, args.verification_note,
         )
     )
 
 
 def result_list_command(args: argparse.Namespace) -> None:
     """List compact result index entries."""
-    _print_json(list_results(_root(args)))
+    _print_json(
+        list_results(
+            _root(args), args.kind, args.verification_status, args.reusable, args.text,
+        )
+    )
+
+
+def result_rebuild_command(args: argparse.Namespace) -> None:
+    """Rebuild the compact Result index from canonical records."""
+    _print_json(rebuild_result_index(_root(args)))
 
 
 def result_show_command(args: argparse.Namespace) -> None:
@@ -676,14 +687,22 @@ def build_parser() -> argparse.ArgumentParser:
     add.add_argument("--source-ref", action="append")
     add.add_argument("--artifact-ref", action="append")
     add.add_argument("--verification-status", choices=("unverified", "reviewed", "verified", "rejected"), required=True)
+    add.add_argument("--reviewed-by")
+    add.add_argument("--verification-note", default="")
     add.add_argument("--reusable", action=argparse.BooleanOptionalAction, default=False)
     add.add_argument("--supersedes")
     _set_handler(add, result_add_command, "project")
     result_list = result_commands.add_parser("list")
+    result_list.add_argument("--kind", choices=("experiment", "failure", "review", "decision", "asset"))
+    result_list.add_argument("--verification-status", choices=("unverified", "reviewed", "verified", "rejected"))
+    result_list.add_argument("--reusable", action=argparse.BooleanOptionalAction, default=None)
+    result_list.add_argument("--text")
     _set_handler(result_list, result_list_command, "project")
     result_show = result_commands.add_parser("show")
     result_show.add_argument("result_id")
     _set_handler(result_show, result_show_command, "project")
+    result_rebuild = result_commands.add_parser("rebuild")
+    _set_handler(result_rebuild, result_rebuild_command, "project")
 
     doctor = commands.add_parser("doctor")
     doctor_commands = doctor.add_subparsers(dest="doctor_command", required=True)

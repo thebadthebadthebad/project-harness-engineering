@@ -155,6 +155,10 @@ print(json.dumps({'type':'turn.completed','usage':{'input_tokens':tokens,'output
     def test_capability_fallback_is_applied_to_real_argv_and_handoff(self) -> None:
         root = self.project()
         self.create_codex_task(root, "agent-one")
+        task_view = self.ctl(root, "task", "show", "agent-one").stdout
+        self.assertIn("## Outputs", task_view)
+        self.assertIn("## Validation Commands", task_view)
+        self.assertIn("Post-run token ceiling", task_view)
         self.commit_state(root, "create agent task")
         self.start(root, "agent-one")
         capture = self.base / "capture.json"
@@ -176,6 +180,10 @@ print(json.dumps({'type':'turn.completed','usage':{'input_tokens':tokens,'output
         self.assertIn('web_search="disabled"', captured["argv"])
         self.assertIn("Agent task", captured["prompt"])
         self.assertIn("parent Agent reviews", captured["prompt"])
+        review = self.ctl(root, "task", "review", "agent-one").stdout
+        self.assertIn("## Findings", review)
+        self.assertIn("## Limitations", review)
+        self.assertIn("## Codex Execution Contract", review)
 
     def test_decision_pauses_only_its_task_and_explicit_resolution_resumes_it(self) -> None:
         root = self.project()
@@ -224,15 +232,31 @@ print(json.dumps({'type':'turn.completed','usage':{'input_tokens':tokens,'output
 
     def test_result_index_is_readable_and_injected_by_stable_reference(self) -> None:
         root = self.project()
+        (root / "docs/result.md").write_text("# Parser result\n")
         self.ctl(
             root, "result", "add", "experiment-one", "--kind", "experiment",
             "--summary", "Prior parser experiment passed", "--source-ref", "task:old-task",
-            "--artifact-ref", "docs/result.md", "--verification-status", "verified", "--reusable",
+            "--artifact-ref", "docs/result.md", "--verification-status", "verified",
+            "--reviewed-by", "parent-agent", "--verification-note", "Reviewed result",
+            "--reusable",
         )
         indexed = json.loads(self.ctl(root, "result", "list").stdout)
         self.assertEqual("experiment-one", indexed[0]["id"])
+        filtered = json.loads(
+            self.ctl(root, "result", "list", "--kind", "experiment", "--reusable").stdout
+        )
+        self.assertEqual(["experiment-one"], [item["id"] for item in filtered])
         view = self.ctl(root, "result", "show", "experiment-one").stdout
         self.assertIn("Prior parser experiment passed", view)
+        self.assertIn("Reviewed by: parent-agent", view)
+        self.assertIn("SHA-256", view)
+        artifact = root / "docs/result.md"
+        original_artifact = artifact.read_text()
+        artifact.write_text("changed after review\n")
+        damaged = self.ctl(root, "check", ok=False)
+        self.assertIn("artifact digest mismatch", damaged.stderr)
+        artifact.write_text(original_artifact)
+        self.ctl(root, "check")
         self.create_codex_task(root, "agent-one", "medium", context_ref="result:experiment-one")
         self.commit_state(root, "result and task")
         self.start(root, "agent-one")
@@ -243,6 +267,47 @@ print(json.dumps({'type':'turn.completed','usage':{'input_tokens':tokens,'output
         prompt = json.loads(capture.read_text())["prompt"]
         self.assertIn("result:experiment-one", prompt)
         self.assertIn("Prior parser experiment passed", prompt)
+
+    def test_concurrent_result_add_is_serialized_and_index_is_rebuildable(self) -> None:
+        root = self.project()
+        commands = []
+        for index in (1, 2):
+            artifact = root / "docs" / ("result-" + str(index) + ".md")
+            artifact.write_text("result " + str(index) + "\n")
+            commands.append(
+                [
+                    "python3", str(root / "tools/projectctl.py"), "--root", str(root),
+                    "result", "add", "result-" + str(index), "--kind", "experiment",
+                    "--summary", "Concurrent result " + str(index),
+                    "--artifact-ref", artifact.relative_to(root).as_posix(),
+                    "--verification-status", "unverified",
+                ]
+            )
+        processes = [
+            subprocess.Popen(command, cwd=root, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            for command in commands
+        ]
+        outcomes = [process.communicate(timeout=10) + (process.returncode,) for process in processes]
+        self.assertEqual([0, 0], [item[2] for item in outcomes], outcomes)
+        indexed = json.loads(self.ctl(root, "result", "list").stdout)
+        self.assertEqual(["result-1", "result-2"], [item["id"] for item in indexed])
+        (root / ".harness/results/index.json").unlink()
+        self.ctl(root, "result", "rebuild")
+        self.ctl(root, "check")
+
+    def test_misleading_full_access_network_contract_is_rejected(self) -> None:
+        root = self.project()
+        self.ctl(
+            root, "task", "create", "unsafe-agent", "--goal", "Unsafe", "--scope", "One file",
+            "--codex", "--sandbox", "danger-full-access", "--approval-policy", "never",
+            "--web-mode", "disabled", "--no-network-access", "--allowed-tool", "shell",
+        )
+        self.commit_state(root, "create unsafe task")
+        self.start(root, "unsafe-agent")
+        rejected = self.ctl(
+            root, "task", "run", "unsafe-agent", "--codex-bin", str(self.fake_codex), ok=False,
+        )
+        self.assertIn("cannot promise network isolation", rejected.stderr)
 
 
 if __name__ == "__main__":

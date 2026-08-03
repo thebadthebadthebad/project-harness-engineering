@@ -17,16 +17,16 @@ doing
 
 | Work | Status |
 | --- | --- |
-| 기능 책임·도입 범위 확정 | doing |
-| core 안정성 개선 | todo |
-| human View·재사용 흐름 개선 | todo |
-| 공용 template 문서와 root README 개선 | todo |
-| 회귀·bundle 검증과 handoff | todo |
+| 기능 책임·도입 범위 확정 | completed |
+| core 안정성 개선 | completed |
+| human View·재사용 흐름 개선 | completed |
+| 공용 template 문서와 root README 개선 | completed |
+| 회귀·bundle 검증과 handoff | doing |
 
 Work Status는 `todo`, `doing`, `completed` 중 하나를 사용한다.
 
 ## Current Work
 
-기능 책임·도입 범위 확정
+회귀·bundle 검증과 handoff
 
 Task가 `completed` 또는 `stopped`이면 `None`으로 작성한다.

@@ -12,9 +12,9 @@ Run only the Project checkpoint the user explicitly requested.
 3. Check `.harness/install.json` authority. Use the following v2 commands when authority is `v2`; do not invoke a legacy writer.
    - View: `show project`, `task show <name>`, `task review <name>`.
    - Task: `task create|start|run|submit` with the explicit contract and worktree handoff.
-   - Decisions and reusable results: `decision show|resolve`, `result add|list|show` only for an explicit user choice or reviewed result.
+   - Decisions and reusable results: `decision show|resolve`, `result add|list|show|rebuild` only for an explicit user choice or reviewed result. `reviewed|verified` results require reviewer and real source/artifact evidence.
    - Background work: `queue enqueue|list|status|cancel|resume` and `worker run|start|stop`; never auto-resume `interrupted` work.
-   - Promotion: `promotion prepare|show|approve|apply`; approval applies only to the displayed exact diff and validation digest.
+   - Promotion: `promotion prepare|show|approve|apply`; review the actual diff, current base, validation and log before approval. A changed HEAD, Task, diff, or stale validation requires a new packet.
 4. Under legacy authority, use `projectctl check`, `task validate`, `task status`, or `task handoff` for deterministic checks instead of manually scanning every Markdown file.
    - Status: `python3 tools/projectctl.py task status [--json]` takes no Task name.
    - Create: `python3 tools/projectctl.py task create <name> --goal <final-goal>`.

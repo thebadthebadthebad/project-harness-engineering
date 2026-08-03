@@ -13,9 +13,10 @@
 - Background Task는 Git-local `queue`와 단일 `worker` coordinator로 실행한다. 기본 total parallel은 2, writer parallel은 1이며 더 높은 writer 병렬성은 격리·검증 근거가 있을 때만 명시한다.
 - Worker가 시작될 때 남은 `running` job은 `interrupted`로 바꾸고 자동 재시도하지 않는다. 사용자가 상태와 잔존 프로세스를 확인한 뒤 `queue resume`을 명시해야 한다.
 - Queue job의 `succeeded`는 review 가능한 handoff가 생겼다는 뜻이지 공식 반영이나 품질 승인이 아니다. Parent Agent와 사용자의 Promotion 책임은 유지된다.
-- 검증된 실험·실패·리뷰·결정·재사용 자산만 `result add`로 색인하고 후속 Task는 stable `kind:id` context reference를 사용한다.
-- v2 Task 결과는 지정된 별도 Git worktree와 `owned_write_paths` 안에서만 작성한다. 공식 Project 변경은 parent Agent가 handoff와 validation을 검토하고 사용자가 승인한 Promotion packet으로만 수행한다.
+- 검증된 실험·실패·리뷰·결정·재사용 자산만 reviewer와 실제 source/artifact 근거를 포함해 `result add`로 색인한다. 후속 Task는 stable `kind:id` context reference를 사용하고 index 불일치는 `result rebuild` 뒤 `check`로 복구한다.
+- v2 Task 결과는 지정된 별도 Git worktree와 `owned_write_paths` 안에서만 작성한다. Symlink source/target은 허용하지 않는다. 공식 Project 변경은 parent Agent가 handoff와 validation을 검토하고 사용자가 actual diff·current base·fresh validation을 승인한 Promotion packet으로만 수행한다.
 - `.harness`의 canonical JSON은 Git에 추적한다. Git-local runtime, Task·integration worktree와 승인 전 packet은 공식 지식이 아니며 provenance 확인 없이 자동 삭제하지 않는다.
+- `projectctl check`의 v2 schema·digest·reference·Result provenance 오류를 형식 경고로 무시하지 않는다. Stale writer 오류는 최신 View를 다시 읽은 뒤 재시도하며 JSON을 수동 병합하지 않는다.
 - 함수는 역할·입력·출력이 드러나게 작성하고 재사용 가능한 작은 경계를 사용한다. 이해하기 쉬운 단순 구현을 우선하고 변경한 코드는 관련 검증을 수행한다.
 - 새 문서나 디렉터리는 기존 책임으로 표현할 수 없을 때만 추가한다.
 - Skill은 사용자가 `$manage-project-workflow`로 명시 호출했을 때만 사용한다.

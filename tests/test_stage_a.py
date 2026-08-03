@@ -119,6 +119,40 @@ class StageATest(unittest.TestCase):
             json.loads((rollback_root / ".harness/install.json").read_text())["harness_version"],
         )
 
+    def test_first_apply_requires_replace_ack_and_managed_paths_reject_symlinks(self) -> None:
+        bundle = self.package(self.candidate_template("source"), "2.0.0-a1", "bundle")
+        root = self.candidate_template("existing")
+        (root / "GUIDE.md").write_text("Existing local guide\n")
+        refused = self.command(
+            "python3", str(HARNESSCTL), "apply", str(root), "--source", str(bundle),
+            "--apply", ok=False,
+        )
+        self.assertIn("--accept-managed-replace", refused.stderr)
+        self.command(
+            "python3", str(HARNESSCTL), "apply", str(root), "--source", str(bundle),
+            "--apply", "--accept-managed-replace",
+        )
+
+        unsafe = self.candidate_template("unsafe")
+        shutil.rmtree(unsafe / ".codex")
+        outside = self.base / "outside"
+        outside.mkdir()
+        (unsafe / ".codex").symlink_to(outside, target_is_directory=True)
+        rejected = self.command(
+            "python3", str(HARNESSCTL), "apply", str(unsafe), "--source", str(bundle),
+            ok=False,
+        )
+        self.assertIn("symlink is not allowed", rejected.stderr)
+
+        unsafe_template = self.candidate_template("unsafe-template")
+        (unsafe_template / "GUIDE.md").unlink()
+        (unsafe_template / "GUIDE.md").symlink_to(self.base / "external-guide.md")
+        packaged = self.command(
+            "python3", str(HARNESSCTL), "package", "--template", str(unsafe_template),
+            "--version", "unsafe", "--output", str(self.base / "unsafe-bundle"), ok=False,
+        )
+        self.assertIn("symlink is not allowed in template", packaged.stderr)
+
     def test_legacy_conversion_parity_switch_guard_and_rollback(self) -> None:
         root = self.candidate_template("legacy")
         self.git(root, "init")
@@ -152,6 +186,18 @@ class StageATest(unittest.TestCase):
         self.assertIn("legacy lifecycle writer is disabled", blocked.stderr)
         self.ctl(root, "migrate", "rollback", "legacy-to-v2")
         self.assertEqual("legacy", json.loads((root / ".harness/install.json").read_text())["authority"])
+
+    def test_legacy_inventory_blocks_partial_task_omission(self) -> None:
+        root = self.candidate_template("partial-legacy")
+        self.git(root, "init")
+        partial = root / "tasks/partial-task"
+        partial.mkdir()
+        shutil.copy2(root / "tasks/_template/TASK.md", partial / "TASK.md")
+        inspected = json.loads(self.ctl(root, "migrate", "inspect").stdout)
+        self.assertFalse(inspected["supported"])
+        self.assertEqual(["STATUS.md", "REPORT.md"], inspected["source_inventory"]["partial_tasks"]["partial-task"])
+        blocked = self.ctl(root, "migrate", "plan", ok=False)
+        self.assertIn("partial Tasks", blocked.stderr)
 
     def create_started_task(self, root: Path, validation: str = "python3 -c pass") -> tuple[Path, str]:
         self.ctl(
@@ -187,6 +233,10 @@ class StageATest(unittest.TestCase):
         packet = json.loads(
             self.ctl(root, "promotion", "prepare", "--task", "build-one", "--candidate", "result").stdout
         )
+        review = self.ctl(root, "promotion", "show", packet["promotion_id"]).stdout
+        self.assertIn("## Exact Diff", review)
+        self.assertIn("+verified", review)
+        self.assertIn("full log", review)
         self.ctl(root, "promotion", "approve", packet["promotion_id"], "--actor", "test-user")
         self.ctl(root, "promotion", "apply", packet["promotion_id"])
         self.assertEqual("verified\n", (root / "src/result.txt").read_text())
@@ -216,6 +266,43 @@ class StageATest(unittest.TestCase):
         (Path(packet["workspace"]) / "src/result.txt").write_text("changed after approval\n")
         stale = self.ctl(other, "promotion", "apply", packet["promotion_id"], ok=False)
         self.assertIn("approved Promotion diff changed", stale.stderr)
+
+    def test_v2_check_detects_canonical_damage_and_promotion_base_drift(self) -> None:
+        root = self.new_project(self.package(self.candidate_template(), "2.0.0-a1", "bundle"))
+        project_path = root / ".harness/project.json"
+        original = project_path.read_text()
+        payload = json.loads(original)
+        payload["goal"] = "tampered without resealing"
+        project_path.write_text(json.dumps(payload))
+        damaged = self.ctl(root, "check", ok=False)
+        self.assertIn("digest mismatch", damaged.stderr)
+        project_path.write_text(original)
+
+        self.create_started_task(root)
+        self.ctl(root, "task", "submit", "build-one", "--handoff", "handoff.json")
+        self.git(root, "add", ".harness")
+        self.git(root, "commit", "-m", "review task")
+        packet = json.loads(
+            self.ctl(root, "promotion", "prepare", "--task", "build-one", "--candidate", "result").stdout
+        )
+        self.git(root, "commit", "--allow-empty", "-m", "advance official base")
+        stale = self.ctl(
+            root, "promotion", "approve", packet["promotion_id"], "--actor", "test-user", ok=False,
+        )
+        self.assertIn("official HEAD changed", stale.stderr)
+
+    def test_task_handoff_rejects_symlink_candidate_source(self) -> None:
+        root = self.new_project(self.package(self.candidate_template(), "2.0.0-a1", "bundle"))
+        workspace, _ = self.create_started_task(root)
+        external = self.base / "external.txt"
+        external.write_text("outside\n")
+        source = workspace / "task-output/result.txt"
+        source.unlink()
+        source.symlink_to(external)
+        rejected = self.ctl(
+            root, "task", "submit", "build-one", "--handoff", "handoff.json", ok=False,
+        )
+        self.assertIn("symlink", rejected.stderr)
 
 
 if __name__ == "__main__":

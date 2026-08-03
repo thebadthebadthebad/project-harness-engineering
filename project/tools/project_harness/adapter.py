@@ -6,17 +6,15 @@ import hashlib
 import json
 import os
 import re
+import signal
 import subprocess
 import tempfile
 import time
-from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Callable, Iterator, Sequence
-
-import fcntl
+from typing import Any, Callable, Sequence
 
 from .errors import HarnessError
-from .repository import git_dir
+from .repository import canonical_state_lock, contained_path, git_dir
 from .v2 import (
     content_digest,
     read_json,
@@ -38,6 +36,7 @@ SANDBOX_MODES = ("read-only", "workspace-write", "danger-full-access")
 APPROVAL_POLICIES = ("untrusted", "on-request", "never")
 WEB_MODES = ("disabled", "cached", "indexed", "live")
 CONTROLLABLE_TOOLS = ("web_search", "view_image", "multi_agent")
+DECLARED_TOOLS = ("shell", "apply_patch", *CONTROLLABLE_TOOLS)
 FINAL_HANDOFF_SCHEMA: dict[str, Any] = {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "type": "object",
@@ -95,19 +94,6 @@ FINAL_HANDOFF_SCHEMA: dict[str, Any] = {
 }
 
 
-@contextmanager
-def canonical_state_lock(root: Path) -> Iterator[None]:
-    """Serialize short canonical-state mutations across local processes."""
-    path = git_dir(root) / "harness/v2/canonical.lock"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a+") as handle:
-        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-
-
 def _run(argv: Sequence[str], cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
     """Run one read-only capability command."""
     return subprocess.run(argv, cwd=cwd, text=True, capture_output=True)
@@ -153,6 +139,8 @@ def capability_probe(codex_bin: str = "codex") -> dict[str, Any]:
         "approval_policies": list(APPROVAL_POLICIES),
         "web_modes": list(WEB_MODES),
         "controllable_tools": list(CONTROLLABLE_TOOLS),
+        "declared_tools": list(DECLARED_TOOLS),
+        "agent_policy_only_tools": ["shell", "apply_patch"],
         "mcp_servers": mcp_servers,
         "probed_at": utc_now(),
     }
@@ -226,6 +214,19 @@ def normalize_contract(
         raise HarnessError("unsupported web mode")
     if not isinstance(contract["network_access"], bool):
         raise HarnessError("network_access must be boolean")
+    if contract["sandbox"] == "danger-full-access" and not contract["network_access"]:
+        raise HarnessError(
+            "danger-full-access cannot promise network isolation; use workspace-write or enable network explicitly"
+        )
+    allowed_tools = contract.get("allowed_tools")
+    if not isinstance(allowed_tools, list):
+        raise HarnessError("allowed_tools must be a list")
+    unknown_tools = sorted(set(allowed_tools) - set(DECLARED_TOOLS))
+    if unknown_tools:
+        raise HarnessError("unsupported declared tools: " + ", ".join(unknown_tools))
+    web_declared = "web_search" in allowed_tools
+    if (contract["web_mode"] != "disabled") != web_declared:
+        raise HarnessError("web_search tool declaration must match the requested web mode")
     seconds = contract["limits"].get("seconds")
     tokens = contract["limits"].get("tokens")
     if not isinstance(seconds, int) or seconds < 1:
@@ -240,6 +241,8 @@ def normalize_contract(
         raise HarnessError("context file limit cannot exceed total limit")
     if contract["agent"].get("may_delegate") and "multi_agent" not in contract["allowed_tools"]:
         raise HarnessError("delegation requires multi_agent in allowed_tools")
+    if not contract["agent"].get("may_delegate") and "multi_agent" in contract["allowed_tools"]:
+        raise HarnessError("multi_agent requires an explicit delegation contract")
     installed_mcp = set(capabilities.get("mcp_servers", []))
     missing_mcp = sorted(set(contract.get("allowed_mcp", [])) - installed_mcp)
     if missing_mcp:
@@ -249,6 +252,14 @@ def normalize_contract(
             name for name in contract["allowed_mcp"] if name in installed_mcp
         ]
         fallbacks.append({"field": "allowed_mcp", "removed": missing_mcp})
+    contract["enforcement"] = {
+        "hard": ["sandbox", "wall_time", "structured_output"],
+        "cli_config": ["approval_policy", "web_mode", "network_access", "mcp", "skills", "view_image", "multi_agent"],
+        "agent_policy_only": [
+            item for item in contract["allowed_tools"] if item in {"shell", "apply_patch"}
+        ],
+        "post_run_only": ["token_ceiling"],
+    }
     return contract, fallbacks
 
 
@@ -312,6 +323,9 @@ def build_argv(
         argv.extend(("-c", "mcp_servers." + name + ".enabled=" + str(name in enabled_mcp).lower()))
     discovered_skills = _skill_paths(workspace)
     allowed_skills = set(contract.get("allowed_skills", []))
+    missing_skills = sorted(allowed_skills - set(discovered_skills))
+    if missing_skills:
+        raise HarnessError("required Project skills unavailable: " + ", ".join(missing_skills))
     if discovered_skills:
         entries = ",".join(
             "{path=" + _toml_string(str(path)) + ",enabled=" + str(name in allowed_skills).lower() + "}"
@@ -325,7 +339,7 @@ def build_argv(
 def _load_context_reference(root: Path, reference: str) -> dict[str, Any]:
     """Resolve one minimal stable Task context reference."""
     kind, separator, identifier = reference.partition(":")
-    if not separator or not identifier:
+    if not separator or not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", identifier):
         raise HarnessError("context ref must use kind:id")
     paths = {
         "result": root / ".harness/results" / (identifier + ".json"),
@@ -358,9 +372,7 @@ def load_input_context(
         relative = Path(str(item["path"]))
         if relative.is_absolute() or ".." in relative.parts:
             raise HarnessError("Task input path is unsafe")
-        source = workspace / relative
-        if not source.is_file():
-            raise HarnessError("Task input file is missing: " + relative.as_posix())
+        source = contained_path(workspace, relative.as_posix(), must_exist=True)
         data = source.read_bytes()
         if len(data) > contract["context_limits"]["file_bytes"]:
             raise HarnessError("Task input exceeds file context limit: " + relative.as_posix())
@@ -470,6 +482,7 @@ def _run_codex(
         stderr=subprocess.PIPE,
         text=True,
         env=os.environ.copy(),
+        start_new_session=True,
     )
     deadline = time.monotonic() + seconds
     first_input: str | None = prompt
@@ -477,11 +490,17 @@ def _run_codex(
         cancelled = bool(cancel_check and cancel_check())
         remaining = deadline - time.monotonic()
         if cancelled or remaining <= 0:
-            process.terminate()
+            try:
+                os.killpg(process.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
             try:
                 stdout, stderr = process.communicate(timeout=2)
             except subprocess.TimeoutExpired:
-                process.kill()
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
                 stdout, stderr = process.communicate()
             return (
                 subprocess.CompletedProcess(argv, 130 if cancelled else 124, stdout, stderr),
@@ -564,6 +583,7 @@ def execute_task(
         "timed_out": timed_out,
         "cancelled": cancelled,
         "usage": usage,
+        "token_ceiling_enforcement": "post-run",
         "token_limit_exceeded": token_limit is not None and token_total > token_limit,
         "events": events,
         "stderr": process.stderr[-8000:],
@@ -633,8 +653,8 @@ def execute_task(
         return {"status": "blocked", "reason": reason, "evidence": str(runtime / "run.json")}
     handoff_source = Path(workspace["workspace"]) / ".harness-agent-handoff.json"
     write_json(handoff_source, final)
+    handoff = submit_handoff(root, task_id, Path(".harness-agent-handoff.json"))
     with canonical_state_lock(root):
-        handoff = submit_handoff(root, task_id, Path(".harness-agent-handoff.json"))
         handoff_path = root / ".harness/tasks" / task_id / "handoff.json"
         handoff = _replace_record(
             handoff_path,

@@ -556,6 +556,10 @@ def check_project(root: Path, installation_only: bool = False) -> list[str]:
         for path in sorted((root / "docs/history").glob("*.md")):
             if not history_pattern.fullmatch(path.name):
                 errors.append("invalid History filename: " + path.name)
+    elif not installation_only and authority == "v2":
+        from .v2 import check_v2_authority
+
+        errors.extend(check_v2_authority(root))
     if not installation_only:
         for path in sorted((root / "docs/adr").glob("*.md")):
             if not re.fullmatch(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*\.md", path.name):

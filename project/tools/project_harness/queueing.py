@@ -15,7 +15,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
-from .adapter import canonical_state_lock, execute_task
+from .adapter import execute_task
+from .repository import canonical_state_lock
 from .errors import HarnessError
 from .repository import git_dir
 from .v2 import (

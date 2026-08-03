@@ -5,7 +5,7 @@
 ## Authority and Distribution
 
 - 각 적용 Project는 자신의 `.harness` 상태와 Git 이력을 독립적으로 소유한다. Harness Engineering 저장소는 bundle 원본·버전만 배포하며 적용 Project를 검색하거나 등록하지 않는다.
-- `.harness/install.json`의 `authority`가 `legacy`이면 기존 Markdown lifecycle이 원본이다. `v2`이면 sealed JSON record가 원본이고 `projectctl show`가 읽기 쉬운 Markdown View를 생성한다.
+- `.harness/install.json`의 `authority`가 `legacy`이면 기존 Markdown lifecycle이 원본이다. `v2`이면 sealed JSON record가 원본이고 `projectctl show`, `task show/review`, `decision show`, `promotion show`, `result show`가 읽기 쉬운 Markdown View를 생성한다. `projectctl check`는 v2 record의 schema, digest, internal reference, Result index와 artifact provenance를 전수 검사한다.
 - 공용 bundle의 `managed` 파일은 checksum 기반으로 갱신한다. `bootstrap` 파일은 없을 때만 만들고, `integration` 파일은 기존 사용자 내용을 보존한다.
 - root distribution의 `harnessctl`은 `package|new|apply|update`를 담당한다. 적용 뒤 각 Project의 로컬 `tools/projectctl.py`가 상태와 Task를 담당하므로 중앙 설치에 실행 의존하지 않는다.
 
@@ -19,7 +19,7 @@
 - Task Agent와 subagent: 명시된 scope와 file ownership 안에서 산출물과 근거를 만든다. Subagent는 objective, inputs, context refs, owned paths, typed outputs 계약이 필요하다.
 - Parent Agent: handoff 주장·validation·diff를 검토하고 후보를 선택·통합한다. Agent 결과를 자동으로 공식 사실로 승격하지 않는다.
 - User: 목표·범위·가치 판단, 추가 권한, 외부 변경과 exact-diff Promotion을 승인한다.
-- Deterministic scripts: bundle checksum, schema/digest, worktree, validation, diff, index와 상태 전이를 담당한다.
+- Deterministic scripts: bundle checksum, resolved path containment, schema/digest/reference, worktree, bounded validation, diff, index와 상태 전이를 담당한다.
 
 이 책임들은 versioned bundle의 `AGENTS.md`, `.agents/`, `.codex/`, `tools/`, `tasks/_template/`, `GUIDE.md`, `STRUCTURE.md`에 각각 포함된다. 인증 정보, 적용 Project 목록과 Git-local run evidence는 bundle에 포함하지 않는다.
 
@@ -54,12 +54,11 @@ Task 내부 디렉터리는 다음 책임을 가진다.
 
 ## Execution Model
 
-- 사용자가 Project 세션과 Task 세션을 직접 전환한다.
-- Task Agent는 Project Agent가 호출하거나 자동으로 오케스트레이션하지 않는다.
-- Task 세션은 `danger-full-access`, network 허용, approval 없음으로 실행한다.
-- 현재 환경에서는 Project write를 sandbox로 막지 않는다.
-- Task 시작 전 Git 기준점과 linked data checksum을 저장하고 종료 후 예상 외 변경을 감사한다.
-- 감사는 우발적 변경 감지 장치이며 악의적 변경을 막는 보안 경계가 아니다.
+- Legacy/manual session에서는 사용자가 Project 세션과 Task 세션을 직접 전환한다. Interactive `projectctl session`은 신뢰한 저장소에서 사용하는 full-access launcher다.
+- v2 Task는 별도 worktree에서 사람이 수행하거나 Codex adapter가 non-interactive로 실행한다. Adapter 기본은 `workspace-write`, approval `never`, web/network disabled이며 execution contract가 우선한다.
+- Stage C queue는 독립 Codex Task를 병렬 실행하지만 긴 Codex turn과 validation은 canonical writer lock 밖에서 수행한다. 마지막 짧은 JSON compare-and-write만 직렬화한다.
+- Task 시작 전 Git 기준점을 고정하고 input digest, owned path와 validation을 계약에 기록한다.
+- worktree, ownership과 Git 감사는 우발적 경계 이탈 감지 장치이며 hostile code를 막는 완전한 보안 sandbox가 아니다.
 
 v2의 수동 Stage A 흐름은 다음과 같다.
 
@@ -70,15 +69,15 @@ Task JSON 생성·commit
   → task submit이 ownership과 validation 검사
   → parent Agent가 handoff/candidate 검토
   → promotion prepare가 선택 후보만 integration worktree에 배치
-  → 사용자가 exact diff·validation packet 승인
-  → approval digest가 여전히 같을 때만 official branch에 반영
+  → 사용자가 actual exact diff·base·validation packet 승인
+  → current HEAD·Task·diff·approval이 같고 apply 직전 validation이 통과할 때만 official branch에 반영
 ```
 
 Task worktree와 integration worktree는 자동 삭제하지 않는다. Validation 실패, 후보 밖 변경, 승인 후 diff 변경, dirty official worktree는 반영을 차단한다.
 
 Stage B에서는 active Task를 `task run`으로 Codex adapter에 넘길 수 있다. Adapter는 Project goal, Task contract, 검증된 context references와 Agent 역할만 bounded prompt로 구성한다. 최종 출력은 `completed`, `needs_decision`, `blocked` 중 하나이며, completed handoff도 parent review 뒤에만 Promotion 후보가 된다.
 
-Stage C의 queue는 `.git/harness/v2/queue.sqlite3`에 현재 job 상태만 저장한다. 한 Project에 하나의 coordinator가 기본 total 2, writer 1로 Task를 scheduling한다. Codex subprocess 실행은 병렬이지만 canonical JSON mutation은 짧은 local file lock으로 직렬화한다. SQLite는 공식 Project 지식, 중앙 registry, append-only ledger 또는 distributed scheduler가 아니다.
+Stage C의 queue는 `.git/harness/v2/queue.sqlite3`에 현재 job 상태만 저장한다. 한 Project에 하나의 coordinator가 기본 total 2, writer 1로 Task를 scheduling한다. Codex subprocess와 validation은 병렬이지만 canonical JSON mutation은 짧은 re-entrant local file lock과 revision compare-and-swap으로 보호한다. SQLite는 공식 Project 지식, 중앙 registry, append-only ledger 또는 distributed scheduler가 아니다.
 
 ```text
 ready Task + committed contract
@@ -94,7 +93,7 @@ Queued job은 즉시 취소할 수 있고 running job은 cooperative cancel requ
 
 권한·외부 변경·범위 확대가 필요하면 해당 Task에 pending Decision record를 만들고 `needs_decision`으로 바꾼다. Decision View는 이유, 선택지, 권고, 각 영향, safe default와 보류 가능성을 보여준다. Explicit resolve는 그 Task만 active 또는 blocked로 전환한다.
 
-Result index는 범용 graph가 아니다. `experiment|failure|review|decision|asset`의 짧은 요약, source/artifact refs, 검증 상태, 재사용 여부와 supersedes만 보존하며 후속 Task는 `result:<id>`처럼 참조한다.
+Result index는 범용 graph가 아니다. `experiment|failure|review|decision|asset`의 짧은 요약, source refs, artifact path·byte·digest, reviewer·검증 상태, 재사용 여부와 supersedes만 보존하며 후속 Task는 `result:<id>`처럼 참조한다. Index는 kind/status/reusable/text로 단순 filter하고 canonical Result record에서 rebuild할 수 있다.
 
 Project와 Task 세션은 사용자 shell에서 다음 명령으로 시작한다.
 
@@ -195,7 +194,7 @@ projectctl promotion record로 promoted 또는 not-promoted History 기록
 ## Deterministic Controls
 
 - `projectctl context`: 새 세션에 현재 계약과 종료 대기 handoff를 한 번 제공한다.
-- `projectctl check`: 필수 구조, 문서 section, STATE, ADR·History 이름, Hook·Skill·agent 설정을 검사한다.
+- `projectctl check`: 필수 구조와 문서 section, legacy STATE 또는 v2 canonical schema·digest·reference·Result artifact/index, ADR·History 이름, Hook·Skill·agent 설정을 검사한다.
 - `task validate`: lifecycle 단계별 STATUS, Work Plan, REPORT 형식을 검사한다.
 - `task baseline|audit`: clean Git 기준점, linked data checksum, Task 밖 변경을 검사한다.
 - `task status|handoff|close`: 종료 상태 탐지, 정규화 handoff, STATE와 History 반영을 수행한다.

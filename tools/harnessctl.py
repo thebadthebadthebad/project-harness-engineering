@@ -74,13 +74,34 @@ def safe_relative(raw: str) -> Path:
     return path
 
 
+def contained_path(base: Path, raw: str, must_exist: bool = False) -> Path:
+    """Return a non-symlink bundle/Project path contained by ``base``."""
+    relative = safe_relative(raw)
+    resolved_base = base.resolve()
+    candidate = resolved_base / relative
+    cursor = resolved_base
+    for part in relative.parts:
+        cursor /= part
+        if cursor.is_symlink():
+            raise DistributionError("symlink is not allowed in managed path: " + raw)
+    try:
+        candidate.resolve(strict=False).relative_to(resolved_base)
+    except ValueError as error:
+        raise DistributionError("managed path escapes its root: " + raw) from error
+    if must_exist and not candidate.is_file():
+        raise DistributionError("managed file does not exist: " + raw)
+    return candidate
+
+
 def template_files(template: Path) -> Iterable[Path]:
     """Yield distributable template files in stable order."""
     for path in sorted(template.rglob("*")):
         relative = path.relative_to(template)
+        if path.is_symlink():
+            raise DistributionError("symlink is not allowed in template: " + relative.as_posix())
         if path.is_file() and not any(part in IGNORED_PARTS for part in relative.parts):
             if path.suffix != ".pyc" and relative.as_posix() != MANIFEST:
-                yield path
+                yield contained_path(template, relative.as_posix(), must_exist=True)
 
 
 def ownership(relative: str) -> str:
@@ -131,8 +152,8 @@ def load_bundle(bundle: Path) -> tuple[Path, dict[str, Any]]:
         if relative in seen:
             raise DistributionError("duplicate bundle path: " + relative)
         seen.add(relative)
-        source = bundle / relative
-        if not source.is_file() or digest(source) != item.get("sha256"):
+        source = contained_path(bundle, relative, must_exist=True)
+        if digest(source) != item.get("sha256"):
             raise DistributionError("bundle checksum mismatch: " + relative)
         if item.get("ownership") not in {"managed", "bootstrap", "integration"}:
             raise DistributionError("invalid ownership: " + relative)
@@ -141,6 +162,8 @@ def load_bundle(bundle: Path) -> tuple[Path, dict[str, Any]]:
 
 def copy_file(source: Path, target: Path, mode: int) -> None:
     """Copy one bundle file and its portable permission bits."""
+    if source.is_symlink() or target.is_symlink():
+        raise DistributionError("refusing to copy through a symlink")
     target.parent.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(source, target)
     target.chmod(mode)
@@ -157,7 +180,11 @@ def package(template: Path, version: str, output: Path) -> Path:
     try:
         for item in manifest["files"]:
             relative = safe_relative(item["path"])
-            copy_file(template / relative, stage / relative, int(item["mode"]))
+            copy_file(
+                contained_path(template, relative.as_posix(), must_exist=True),
+                contained_path(stage, relative.as_posix()),
+                int(item["mode"]),
+            )
         write_json(stage / MANIFEST, manifest)
         stage.rename(output)
     except Exception:
@@ -168,7 +195,8 @@ def package(template: Path, version: str, output: Path) -> Path:
 
 def _plan_install(root: Path, manifest: dict[str, Any], update: bool) -> dict[str, Any]:
     """Return an install/update plan without changing the Project."""
-    installed = read_json(root / INSTALL) if (root / INSTALL).is_file() else {}
+    install_target = contained_path(root, INSTALL)
+    installed = read_json(install_target) if install_target.is_file() else {}
     old_checksums = installed.get("managed_checksums", {})
     if not isinstance(old_checksums, dict):
         old_checksums = {}
@@ -176,7 +204,7 @@ def _plan_install(root: Path, manifest: dict[str, Any], update: bool) -> dict[st
     conflicts = []
     for item in manifest["files"]:
         relative = item["path"]
-        target = root / safe_relative(relative)
+        target = contained_path(root, relative)
         current = digest(target) if target.is_file() else None
         wanted = item["sha256"]
         owner = item["ownership"]
@@ -259,6 +287,7 @@ def install(
     update: bool,
     apply: bool,
     initial_authority: str = "legacy",
+    accept_managed_replace: bool = False,
 ) -> dict[str, Any]:
     """Plan or atomically apply a bundle to an existing Project."""
     bundle, manifest = load_bundle(bundle)
@@ -271,23 +300,44 @@ def install(
         return plan
     if plan["conflicts"]:
         raise DistributionError("managed file conflicts: " + ", ".join(plan["conflicts"]))
-    previous_install = read_json(root / INSTALL) if (root / INSTALL).is_file() else {}
+    replacements = [
+        item["path"] for item in plan["actions"]
+        if item["action"] == "replace" and item["ownership"] == "managed"
+    ]
+    if not update and replacements and not accept_managed_replace:
+        raise DistributionError(
+            "managed replacements require --accept-managed-replace after dry-run review: "
+            + ", ".join(replacements)
+        )
+    install_target = contained_path(root, INSTALL)
+    previous_install = read_json(install_target) if install_target.is_file() else {}
     backup_root = Path(tempfile.mkdtemp(prefix="harness-update-"))
     touched = [item for item in plan["actions"] if item["action"] in {"create", "replace"}]
     existing: set[str] = set()
     try:
         for item in touched:
             relative = safe_relative(item["path"])
-            target = root / relative
+            target = contained_path(root, relative.as_posix())
             if target.is_file():
                 existing.add(relative.as_posix())
-                copy_file(target, backup_root / relative, target.stat().st_mode & 0o777)
+                copy_file(
+                    target,
+                    contained_path(backup_root, relative.as_posix()),
+                    target.stat().st_mode & 0o777,
+                )
             manifest_item = next(value for value in manifest["files"] if value["path"] == item["path"])
-            copy_file(bundle / relative, target, int(manifest_item["mode"]))
-        install_target = root / INSTALL
+            copy_file(
+                contained_path(bundle, relative.as_posix(), must_exist=True),
+                target,
+                int(manifest_item["mode"]),
+            )
         if install_target.is_file():
             existing.add(INSTALL)
-            copy_file(install_target, backup_root / INSTALL, install_target.stat().st_mode & 0o777)
+            copy_file(
+                install_target,
+                contained_path(backup_root, INSTALL),
+                install_target.stat().st_mode & 0o777,
+            )
         write_json(
             install_target,
             _install_metadata(root, manifest, previous_install, initial_authority),
@@ -297,15 +347,17 @@ def install(
     except Exception:
         for item in touched:
             relative = safe_relative(item["path"])
-            target = root / relative
+            target = contained_path(root, relative.as_posix())
             if relative.as_posix() in existing:
-                copy_file(backup_root / relative, target, (backup_root / relative).stat().st_mode & 0o777)
+                backup = contained_path(backup_root, relative.as_posix(), must_exist=True)
+                copy_file(backup, target, backup.stat().st_mode & 0o777)
             else:
                 target.unlink(missing_ok=True)
         if INSTALL in existing:
-            copy_file(backup_root / INSTALL, root / INSTALL, (backup_root / INSTALL).stat().st_mode & 0o777)
+            backup = contained_path(backup_root, INSTALL, must_exist=True)
+            copy_file(backup, install_target, backup.stat().st_mode & 0o777)
         else:
-            (root / INSTALL).unlink(missing_ok=True)
+            install_target.unlink(missing_ok=True)
         raise
     finally:
         shutil.rmtree(backup_root, ignore_errors=True)
@@ -334,6 +386,7 @@ def new_project(
             update=False,
             apply=True,
             initial_authority="uninitialized",
+            accept_managed_replace=False,
         )
         if not result["applied"]:
             raise DistributionError("bundle was not applied")
@@ -390,6 +443,7 @@ def build_parser() -> argparse.ArgumentParser:
         command.add_argument("project", type=Path)
         command.add_argument("--source", type=Path, required=True)
         command.add_argument("--apply", action="store_true")
+        command.add_argument("--accept-managed-replace", action="store_true")
     return parser
 
 
@@ -402,7 +456,15 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "new":
             print(new_project(args.source, args.destination, args.project_id, args.goal, args.scope))
         else:
-            _print(install(args.source, args.project, args.command == "update", args.apply))
+            _print(
+                install(
+                    args.source,
+                    args.project,
+                    args.command == "update",
+                    args.apply,
+                    accept_managed_replace=args.accept_managed_replace,
+                )
+            )
         return 0
     except (DistributionError, OSError, subprocess.SubprocessError, json.JSONDecodeError) as error:
         print("error: " + str(error), file=sys.stderr)
