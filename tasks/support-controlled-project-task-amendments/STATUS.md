@@ -3,7 +3,7 @@
 ## Status
 
 
-doing
+completed
 
 허용값은 `todo`, `doing`, `completed`, `stopped`다.
 
@@ -21,12 +21,12 @@ doing
 | amendment 계약과 상태 규칙 설계 | completed |
 | Project·Task preview/apply 구현 | completed |
 | Markdown proposal import와 human View 구현 | completed |
-| 문서·회귀·bundle 검증 및 handoff | doing |
+| 문서·회귀·bundle 검증 및 handoff | completed |
 
 Work Status는 `todo`, `doing`, `completed` 중 하나를 사용한다.
 
 ## Current Work
 
-문서·회귀·bundle 검증 및 handoff
+None
 
 Task가 `completed` 또는 `stopped`이면 `None`으로 작성한다.

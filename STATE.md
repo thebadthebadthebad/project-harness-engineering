@@ -73,6 +73,7 @@
 
 
 
+
 Status는 `todo`, `doing`, `completed` 중 하나를 사용한다.
 
 완료 Task는 Current Goal이 유지되는 동안 표에 유지하며, 다음 Current Goal로 전환할 때 제거한다.
@@ -92,4 +93,4 @@ Status는 `todo`, `doing`, `completed` 중 하나를 사용한다.
 | prepare-balanced-harness-pr | completed |
 | review-harness-fit-and-extensions | completed |
 | improve-harness-safety-usability-docs | completed |
-| support-controlled-project-task-amendments | doing |
+| support-controlled-project-task-amendments | completed |
