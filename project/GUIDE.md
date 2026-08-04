@@ -114,7 +114,59 @@ python3 tools/projectctl.py context
 
 이 출력의 Project Goal, current objective, Current Tasks와 pending handoff를 운영 상태로 사용한다. lifecycle mutation 뒤 상태가 바뀌었을 때만 다시 실행한다.
 
-## 7. Task 계약 작성
+## 7. 생성 후 Project와 Task 계약 개정
+
+v2의 `.harness/project.json`과 `.harness/tasks/*/task.json`은 canonical이므로 직접 편집하지 않는다. 생성 뒤 의미를 고정하는 것이 목적이지 영구 불변으로 만드는 것이 아니다. 공식 amendment는 항상 before/after preview를 먼저 보여주고, apply에서 현재 revision·변경 이유·actor를 기록한다.
+
+Project 목표를 사람이 직접 고칠 때는 읽기 쉬운 View를 Project 안에 저장해 편집한다.
+
+```bash
+python3 tools/projectctl.py show project > docs/project-amendment.md
+# Goal, Scope, Current Objective section을 편집
+python3 tools/projectctl.py project amend \
+  --from-markdown docs/project-amendment.md \
+  --reason "사용자가 범위와 성공 방향을 구체화함" \
+  --actor user
+```
+
+Preview의 `changes`와 `expected_revision`을 검토한 뒤 같은 proposal을 적용한다.
+
+```bash
+python3 tools/projectctl.py project amend \
+  --from-markdown docs/project-amendment.md \
+  --reason "사용자가 범위와 성공 방향을 구체화함" \
+  --actor user \
+  --expected-revision 1 \
+  --apply
+python3 tools/projectctl.py show project
+git diff -- .harness/project.json
+```
+
+한두 필드만 바꿀 때는 `--goal`, 반복 가능한 `--scope`, `--current-objective`를 직접 사용할 수 있다. Scope option은 기존 목록에 추가하는 것이 아니라 전체 목록을 교체한다.
+
+Task도 같은 방식으로 `task show` View를 편집한다. Markdown import가 다루는 필드는 Goal, Scope, Outputs, Dependencies, Owned Write Paths, Acceptance, Validation Commands와 Context References다.
+
+```bash
+python3 tools/projectctl.py task show improve-parser > docs/improve-parser-amendment.md
+# 계약 section 편집
+python3 tools/projectctl.py task amend improve-parser \
+  --from-markdown docs/improve-parser-amendment.md \
+  --reason "검증 조건을 사용자 피드백에 맞춤" \
+  --actor user
+# preview의 expected_revision이 2인 경우
+python3 tools/projectctl.py task amend improve-parser \
+  --from-markdown docs/improve-parser-amendment.md \
+  --reason "검증 조건을 사용자 피드백에 맞춤" \
+  --actor user --expected-revision 2 --apply
+```
+
+Input은 `--input`, Codex 실행 계약은 `--model`, `--reasoning-effort`, sandbox·approval·web/network·tool·MCP·Skill·limit option으로 별도 개정한다. 실행 계약 전체 제거는 `--clear-execution`을 사용한다. Task amendment는 `ready`, `needs_decision`, `blocked`에서만 허용한다. `active`, `review`, `completed`, `stopped` Task의 의미는 중간에 바꾸지 않고 follow-up 또는 replacement Task를 만든다.
+
+Agent가 사용자의 요청을 대신 적용할 때는 `--actor agent --approval-ref <실제-승인-참조>`가 필수다. Approval reference는 인증이나 전자서명이 아니라 대화·Decision·issue와 Git diff를 연결하는 provenance다. Agent는 preview를 사용자에게 보여주고 승인받은 범위만 apply한다. `expected_revision`이 달라졌으면 최신 View로 preview를 다시 만들며 JSON을 수동 병합하지 않는다.
+
+일반 코드·README·설계 문서는 해당 Project의 Git 규칙 안에서 직접 편집할 수 있다. Amendment는 Project/Task canonical 계약 전용이다. Decision은 실행 중 선택, Promotion은 Task 산출물의 공식 반영을 담당하므로 amendment가 두 기능을 대신하지 않는다.
+
+## 8. Task 계약 작성
 
 Task 이름은 의미가 드러나는 lowercase kebab-case를 사용한다. 큰 writer Task에는 최소한 scope, output, acceptance, owned path와 validation을 작성한다. 작은 read-only Task는 필요한 필드만 사용한다.
 
@@ -154,7 +206,7 @@ Task 유형별 공통 원칙:
 
 별도 generic profile을 강제하지 않는다. 같은 계약이 여러 Project에서 반복될 때만 Project-local scoped Skill로 승격한다.
 
-## 8. 수동 worktree Task
+## 9. 수동 worktree Task
 
 Task contract를 commit한 뒤 격리 worktree를 만든다.
 
@@ -192,7 +244,7 @@ git commit -m "task: review improve-parser"
 
 `task review`에서 summary, findings, limitations, acceptance, changed paths, candidates와 validation full-log 경로를 확인한다. Validation은 shell string이 아니라 argv로 실행되고 명령별 기본 300초 timeout을 가진다. Full log는 Git-local이고 canonical handoff에는 tail, digest와 경로만 남는다.
 
-## 9. Codex adapter Task
+## 10. Codex adapter Task
 
 실행 전 capability를 확인한다.
 
@@ -242,7 +294,7 @@ Adapter는 reasoning effort를 prompt 문구가 아니라 Codex CLI config로 �
 
 추가 권한, 외부 변경이나 scope 확대가 필요하면 Task는 `needs_decision`을 반환해야 한다. Adapter가 permission 계열 실패를 감지해도 자동 권한 상승하지 않는다.
 
-## 10. Decision
+## 11. Decision
 
 ```bash
 python3 tools/projectctl.py decision show <decision-id>
@@ -252,7 +304,7 @@ python3 tools/projectctl.py decision resolve <decision-id> \
 
 View는 이유, option별 영향, 권고, safe default와 보류 가능성을 보여준다. Resolve는 canonical Task를 active 또는 blocked로 바꾸지만 queue job은 자동 재실행하지 않는다. Queue에서 실행하던 Task는 상태·worktree를 확인한 뒤 별도로 `queue resume`한다. 다른 독립 Task는 계속 진행한다.
 
-## 11. Queue와 background worker
+## 12. Queue와 background worker
 
 Codex execution contract가 있는 ready Task를 commit한 뒤 enqueue한다.
 
@@ -292,7 +344,7 @@ python3 tools/projectctl.py queue resume <task-id>
 
 Queue `succeeded`는 review 가능한 handoff가 생겼다는 뜻이지 Promotion 승인이 아니다.
 
-## 12. Result 기록과 재사용
+## 13. Result 기록과 재사용
 
 Result는 범용 evidence graph가 아니다. 후속 Task가 발견할 가치가 있는 실험·실패·review·결정·asset만 기록한다.
 
@@ -325,7 +377,7 @@ python3 tools/projectctl.py check
 
 후속 Task는 `--context-ref result:parser-experiment`를 사용한다. Adapter는 digest, summary, verification과 artifact path metadata만 주입하며 artifact 전체 내용은 명시 input으로 별도 선택해야 한다. Superseded, rejected 또는 Project에 맞지 않는 Result를 관성적으로 재사용하지 않는다.
 
-## 13. Promotion
+## 14. Promotion
 
 Parent Agent가 handoff와 candidate를 검토하고 사용자가 공식 반영할 candidate를 선택한 뒤 packet을 만든다. Official worktree와 `.harness`는 clean해야 한다.
 
@@ -355,7 +407,7 @@ Approve는 current base·Task·diff를 확인하고 validation을 새로 실행�
 
 Apply 중 cherry-pick 또는 두 번째 canonical record commit이 실패하면 자동 rollback journal은 없다. `git status`, cherry-pick 상태, candidate commit과 `.harness/promotions`를 확인해 forward repair하고, 불명확하면 Project를 변경하지 말고 중단한다.
 
-## 14. Observability와 Hooks
+## 15. Observability와 Hooks
 
 `.codex/hooks.json`과 `.codex/hooks/observe.py`를 신뢰하기 전에 직접 검토한다. Hook은 항상 성공을 반환하는 fail-open 관찰 장치다.
 
@@ -366,7 +418,7 @@ python3 tools/projectctl.py observe report --latest
 
 Git-local event는 prompt·tool output·patch 전체가 아닌 최소 metadata를 기록한다. Coverage 누락은 “행동이 없었다”는 증거가 아니다. Raw Codex JSONL은 prompt와 Agent message를 포함할 수 있으므로 자동 공개하지 않는다.
 
-## 15. Legacy Project migration
+## 16. Legacy Project migration
 
 기존 Markdown lifecycle Project에 bundle을 먼저 설치한 뒤 authority를 side-by-side로 변환한다. 표준 `PROJECT.md`, `STATE.md`, 완전한 Task `TASK/STATUS/REPORT`와 History가 지원 범위다. Custom/partial Task와 표준 밖 파일은 사람이 별도 inventory로 대조한다.
 
@@ -390,7 +442,7 @@ v2 mutation 뒤에는 legacy authority로 되돌리지 않고 forward repair한�
 
 Migration 전 legacy Task lifecycle이 필요한 경우에만 `task activate|baseline|validate|handoff|audit|close`와 `promotion record`를 사용한다. V2 switch 뒤 legacy writer는 split-brain 방지를 위해 거부된다.
 
-## 16. 문제 진단 순서
+## 17. 문제 진단 순서
 
 1. `python3 tools/projectctl.py check`
 2. `python3 tools/projectctl.py show project`
@@ -404,13 +456,15 @@ Migration 전 legacy Task lifecycle이 필요한 경우에만 `task activate|bas
 대표 오류:
 
 - `canonical record changed concurrently`: stale writer가 감지됐다. 최신 View를 다시 읽고 작업을 재시도한다.
+- `stale Project revision` 또는 `stale Task revision`: preview 뒤 다른 amendment가 먼저 반영됐다. 새 View와 diff를 검토해 새 expected revision으로 다시 승인한다.
+- `Task contract can only be amended`: 이미 실행 또는 review 단계다. 현재 결과를 보존하고 follow-up/replacement Task를 만든다.
 - `official HEAD changed`: 기존 Promotion packet을 버리고 최신 HEAD에서 prepare한다.
 - `managed replacements require`: dry-run replace와 backup을 검토한 뒤 최초 apply에 확인 flag를 사용한다.
 - `symlink is not allowed` 또는 `Task path contains a symlink`: 실제 파일을 Project 안의 정상 경로로 옮긴다.
 - `token limit exceeded`: 이미 사용량이 발생한 뒤의 ceiling 판정이다. 다음 Task scope/input/model을 줄인다.
 - `interrupted`: 자동 resume하지 말고 process와 worktree부터 확인한다.
 
-## 17. 최소 운영 체크리스트
+## 18. 최소 운영 체크리스트
 
 Project 시작:
 
@@ -424,6 +478,13 @@ Task 시작:
 - writer면 owned path와 validation
 - Task contract commit 뒤 start 또는 enqueue
 - Task View에서 requested contract 확인
+
+계약 개정:
+
+- Markdown proposal 또는 명시적 field로 preview
+- before/after, reason, actor와 expected revision 확인
+- Agent apply이면 실제 사용자 approval reference 기록
+- apply 뒤 View·Git diff·`check`와 commit
 
 Task 검토:
 

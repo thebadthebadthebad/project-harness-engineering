@@ -43,6 +43,8 @@ from .queueing import (
 )
 from .v2 import (
     add_result,
+    amend_project,
+    amend_task,
     apply_promotion,
     approve_promotion,
     authority_mode,
@@ -55,6 +57,7 @@ from .v2 import (
     migration_switch,
     migration_verify,
     prepare_promotion,
+    project_updates_from_markdown,
     list_results,
     rebuild_result_index,
     render_decision,
@@ -67,6 +70,7 @@ from .v2 import (
     resolve_decision,
     start_v2_task,
     submit_handoff,
+    task_updates_from_markdown,
 )
 
 
@@ -105,6 +109,34 @@ def init_command(args: argparse.Namespace) -> None:
 def show_project_command(args: argparse.Namespace) -> None:
     """Render the canonical Project state for human review."""
     print(render_project(_root(args)), end="")
+
+
+def project_amend_command(args: argparse.Namespace) -> None:
+    """Preview or apply one controlled canonical Project amendment."""
+    root = _root(args)
+    direct = {
+        key: value for key, value in {
+            "goal": args.goal,
+            "scope": args.scope,
+            "current_objective": args.current_objective,
+            "invariants": args.invariant,
+            "canonical_roots": args.canonical_root,
+        }.items() if value is not None
+    }
+    if args.from_markdown and direct:
+        raise HarnessError("--from-markdown cannot be combined with direct Project fields")
+    updates = (
+        project_updates_from_markdown(root, str(args.from_markdown))
+        if args.from_markdown else direct
+    )
+    if not updates:
+        raise HarnessError("Project amendment requires a field or --from-markdown")
+    _print_json(
+        amend_project(
+            root, updates, args.expected_revision, args.reason, args.actor,
+            args.approval_ref, args.apply,
+        )
+    )
 
 
 def migrate_command(args: argparse.Namespace) -> None:
@@ -225,6 +257,85 @@ def create_command(args: argparse.Namespace) -> None:
 def task_show_command(args: argparse.Namespace) -> None:
     """Render one v2 Task contract and state."""
     print(render_task(_root(args), args.name), end="")
+
+
+def _execution_amendment_patch(args: argparse.Namespace) -> dict[str, Any]:
+    """Build a sparse execution-contract patch from Task amendment flags."""
+    patch: dict[str, Any] = {
+        key: value for key, value in {
+            "model": args.model,
+            "reasoning_effort": args.reasoning_effort,
+            "reasoning_fallback": args.reasoning_fallback,
+            "sandbox": args.sandbox,
+            "approval_policy": args.approval_policy,
+            "web_mode": args.web_mode,
+            "network_access": args.network_access,
+            "allowed_tools": args.allowed_tool,
+            "allowed_mcp": args.allowed_mcp,
+            "allowed_skills": args.allowed_skill,
+        }.items() if value is not None
+    }
+    limits = {
+        key: value for key, value in {
+            "seconds": args.time_limit,
+            "tokens": args.token_limit,
+        }.items() if value is not None
+    }
+    fallback = {
+        key: value for key, value in {
+            "allow_missing_mcp": args.allow_missing_mcp,
+            "allow_reasoning_downgrade": args.allow_reasoning_downgrade,
+        }.items() if value is not None
+    }
+    agent = {
+        key: value for key, value in {
+            "role": args.agent_role,
+            "may_delegate": args.may_delegate,
+        }.items() if value is not None
+    }
+    if limits:
+        patch["limits"] = limits
+    if fallback:
+        patch["fallback"] = fallback
+    if agent:
+        patch["agent"] = agent
+    return patch
+
+
+def task_amend_command(args: argparse.Namespace) -> None:
+    """Preview or apply one controlled canonical Task amendment."""
+    root = _root(args)
+    direct = {
+        key: value for key, value in {
+            "goal": args.goal,
+            "scope": args.scope,
+            "outputs": args.output,
+            "acceptance": args.acceptance,
+            "dependencies": args.dependency,
+            "context_refs": args.context_ref,
+            "owned_write_paths": args.owned_path,
+            "validation_commands": (
+                [shlex.split(item) for item in args.validation_command]
+                if args.validation_command is not None else None
+            ),
+        }.items() if value is not None
+    }
+    if args.from_markdown and direct:
+        raise HarnessError("--from-markdown cannot be combined with direct Task fields")
+    updates = (
+        task_updates_from_markdown(root, str(args.from_markdown))
+        if args.from_markdown else direct
+    )
+    execution_patch = _execution_amendment_patch(args)
+    if not updates and not execution_patch and not args.clear_execution and args.input is None:
+        raise HarnessError("Task amendment requires a field, execution change, input, or --from-markdown")
+    _print_json(
+        amend_task(
+            root, args.name, updates, args.expected_revision, args.reason, args.actor,
+            args.approval_ref, args.apply, execution_patch, args.clear_execution,
+            args.input,
+        )
+    )
 
 
 def task_start_command(args: argparse.Namespace) -> None:
@@ -520,6 +631,22 @@ def build_parser() -> argparse.ArgumentParser:
     init.add_argument("--harness-version", default="development")
     _set_handler(init, init_command, "project")
 
+    project_contract = commands.add_parser("project")
+    project_commands = project_contract.add_subparsers(dest="project_command", required=True)
+    project_amend = project_commands.add_parser("amend")
+    project_amend.add_argument("--goal")
+    project_amend.add_argument("--scope", action="append")
+    project_amend.add_argument("--current-objective")
+    project_amend.add_argument("--invariant", action="append")
+    project_amend.add_argument("--canonical-root", action="append")
+    project_amend.add_argument("--from-markdown", type=Path)
+    project_amend.add_argument("--expected-revision", type=int)
+    project_amend.add_argument("--reason", required=True)
+    project_amend.add_argument("--actor", choices=("user", "agent"), required=True)
+    project_amend.add_argument("--approval-ref")
+    project_amend.add_argument("--apply", action="store_true")
+    _set_handler(project_amend, project_amend_command, "project")
+
     show = commands.add_parser("show")
     show_commands = show.add_subparsers(dest="show_command", required=True)
     show_project = show_commands.add_parser("project")
@@ -591,6 +718,41 @@ def build_parser() -> argparse.ArgumentParser:
     show_task = tasks.add_parser("show")
     show_task.add_argument("name")
     _set_handler(show_task, task_show_command, "project")
+    amend_task_parser = tasks.add_parser("amend")
+    amend_task_parser.add_argument("name")
+    amend_task_parser.add_argument("--goal")
+    amend_task_parser.add_argument("--scope")
+    amend_task_parser.add_argument("--output", action="append")
+    amend_task_parser.add_argument("--acceptance", action="append")
+    amend_task_parser.add_argument("--dependency", action="append")
+    amend_task_parser.add_argument("--context-ref", action="append")
+    amend_task_parser.add_argument("--owned-path", action="append")
+    amend_task_parser.add_argument("--validation-command", action="append")
+    amend_task_parser.add_argument("--input", action="append")
+    amend_task_parser.add_argument("--from-markdown", type=Path)
+    amend_task_parser.add_argument("--model")
+    amend_task_parser.add_argument("--reasoning-effort")
+    amend_task_parser.add_argument("--reasoning-fallback", action="append")
+    amend_task_parser.add_argument("--sandbox", choices=("read-only", "workspace-write", "danger-full-access"))
+    amend_task_parser.add_argument("--approval-policy", choices=("untrusted", "on-request", "never"))
+    amend_task_parser.add_argument("--web-mode", choices=("disabled", "cached", "indexed", "live"))
+    amend_task_parser.add_argument("--network-access", action=argparse.BooleanOptionalAction, default=None)
+    amend_task_parser.add_argument("--allowed-tool", action="append")
+    amend_task_parser.add_argument("--allowed-mcp", action="append")
+    amend_task_parser.add_argument("--allowed-skill", action="append")
+    amend_task_parser.add_argument("--time-limit", type=int)
+    amend_task_parser.add_argument("--token-limit", type=int)
+    amend_task_parser.add_argument("--agent-role", choices=("implementation", "research", "review"))
+    amend_task_parser.add_argument("--may-delegate", action=argparse.BooleanOptionalAction, default=None)
+    amend_task_parser.add_argument("--allow-missing-mcp", action=argparse.BooleanOptionalAction, default=None)
+    amend_task_parser.add_argument("--allow-reasoning-downgrade", action=argparse.BooleanOptionalAction, default=None)
+    amend_task_parser.add_argument("--clear-execution", action="store_true")
+    amend_task_parser.add_argument("--expected-revision", type=int)
+    amend_task_parser.add_argument("--reason", required=True)
+    amend_task_parser.add_argument("--actor", choices=("user", "agent"), required=True)
+    amend_task_parser.add_argument("--approval-ref")
+    amend_task_parser.add_argument("--apply", action="store_true")
+    _set_handler(amend_task_parser, task_amend_command, "project")
     start_task = tasks.add_parser("start")
     start_task.add_argument("name")
     _set_handler(start_task, task_start_command, "project")

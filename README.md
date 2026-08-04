@@ -45,6 +45,7 @@ Harness Engineering은 적용 Project를 검색·등록·원격 관리하지 않
 - 새 v2 Project 생성과 기존 Project의 dry-run 기반 apply/update
 - legacy Markdown 상태의 side-by-side 변환, semantic parity 검증, authority 전환과 제한된 rollback
 - sealed Project·Task·Decision·Result·Promotion JSON과 generated human View
+- 생성 후 Project/Task 계약의 Markdown proposal, before/after preview, revision CAS와 승인 근거가 있는 controlled amendment
 - bounded Task input, dependency, owned path, validation과 context reference
 - Task·integration Git worktree 격리와 candidate 단위 Promotion
 - Codex CLI capability probe, reasoning fallback, sandbox·web·network·MCP·Skill 계약, structured handoff
@@ -164,6 +165,7 @@ python3 tools/harnessctl.py package \
 - wall-time은 hard stop이지만 token ceiling은 완료 usage를 기준으로 사후 판정한다.
 - Hook은 fail-open 관찰 장치이며 보안 enforcement나 완전한 action ledger가 아니다.
 - Promotion 전에 actual diff, current base와 validation을 확인한다. 승인 뒤 base·Task·diff가 바뀌면 새 packet을 만든다.
+- Project와 Task 계약은 JSON을 직접 편집하지 않고 `project amend|task amend` preview를 거친다. Agent가 적용할 때는 실제 사용자 승인 참조를 남기며 실행 중 Task 계약은 바꾸지 않는다.
 - worker crash 뒤에는 잔존 process와 worktree를 확인하기 전 `queue resume`을 실행하지 않는다.
 
 ## 문서 지도

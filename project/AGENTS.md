@@ -3,11 +3,12 @@
 ## Rules
 
 - `.harness/install.json`의 `authority`를 먼저 따른다. `v2`에서는 `.harness/*.json`이 canonical이고 Markdown `show` 출력은 검토용 View이며, legacy lifecycle 문서를 직접 변경하지 않는다.
+- v2 Project/Task 계약 변경은 `show` View를 Project 안의 Markdown proposal로 저장해 편집하거나 명시적 CLI field를 사용한 뒤 `project amend|task amend`로 preview한다. JSON을 직접 고치지 않으며 apply에는 현재 revision·reason·actor가 필요하다. Agent가 apply할 때는 실제 사용자 승인 근거를 `--approval-ref`로 기록한다.
 - 새 Project 세션을 시작하거나 컨텍스트가 압축된 뒤 `python3 tools/projectctl.py context`를 한 번 실행한다.
 - 같은 세션에서는 context의 source 문서가 외부에서 변경됐거나 lifecycle 명령 후 현재 상태가 달라졌을 때만 context를 다시 실행한다.
 - context가 제공한 PROJECT, STATE, pending Task handoff를 별도로 다시 읽지 않는다. 문서를 수정할 때만 필요한 부분을 확인한다.
 - 문서 전체의 TBD·상태를 반복 탐색하지 않고 `projectctl check`와 `projectctl task validate` 결과를 사용한다.
-- v2 Task는 `task create|show|start|submit|review`로, exact-diff 반영은 `promotion prepare|show|approve|apply`로 수행한다. Legacy authority에서만 기존 `activate|baseline|audit|close`와 `promotion record`를 사용한다.
+- v2 Task는 `task create|show|amend|start|submit|review`로, exact-diff 반영은 `promotion prepare|show|approve|apply`로 수행한다. Task 계약 amendment는 ready·needs_decision·blocked에서만 허용한다. Legacy authority에서만 기존 `activate|baseline|audit|close`와 `promotion record`를 사용한다.
 - Codex 실행 계약이 있는 v2 Task는 `task run`으로 실행한다. 요청·실제 model/reasoning/sandbox/approval/web·network/tool·MCP·skill/budget/fallback을 run evidence에 남기며 추가 권한·외부 변경·범위 확대를 자동 승인하지 않는다.
 - `needs_decision` Task만 정지시키고 `decision show|resolve`로 사용자가 명시적으로 선택할 때 재개한다. 다른 독립 Task의 상태는 변경하지 않는다.
 - Background Task는 Git-local `queue`와 단일 `worker` coordinator로 실행한다. 기본 total parallel은 2, writer parallel은 1이며 더 높은 writer 병렬성은 격리·검증 근거가 있을 때만 명시한다.

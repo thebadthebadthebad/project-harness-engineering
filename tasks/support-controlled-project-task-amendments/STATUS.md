@@ -17,16 +17,16 @@ doing
 
 | Work | Status |
 | --- | --- |
-| 현재 mutation·schema와 사용자 편집 경로 분석 | doing |
-| amendment 계약과 상태 규칙 설계 | todo |
-| Project·Task preview/apply 구현 | todo |
-| Markdown proposal import와 human View 구현 | todo |
-| 문서·회귀·bundle 검증 및 handoff | todo |
+| 현재 mutation·schema와 사용자 편집 경로 분석 | completed |
+| amendment 계약과 상태 규칙 설계 | completed |
+| Project·Task preview/apply 구현 | completed |
+| Markdown proposal import와 human View 구현 | completed |
+| 문서·회귀·bundle 검증 및 handoff | doing |
 
 Work Status는 `todo`, `doing`, `completed` 중 하나를 사용한다.
 
 ## Current Work
 
-현재 mutation·schema와 사용자 편집 경로 분석
+문서·회귀·bundle 검증 및 handoff
 
 Task가 `completed` 또는 `stopped`이면 `None`으로 작성한다.

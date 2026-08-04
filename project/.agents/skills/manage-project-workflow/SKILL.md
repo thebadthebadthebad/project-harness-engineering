@@ -11,6 +11,7 @@ Run only the Project checkpoint the user explicitly requested.
 2. Run `python3 tools/projectctl.py context` once. Do not reread documents already included in its `sources` unless editing a specific section.
 3. Check `.harness/install.json` authority. Use the following v2 commands when authority is `v2`; do not invoke a legacy writer.
    - View: `show project`, `task show <name>`, `task review <name>`.
+   - Contract amendment: use `project amend|task amend` only for fields the user directly changed or explicitly approved. Show the preview first. Apply with its current revision and reason; when acting as Agent, include the concrete user approval reference. Never edit canonical JSON directly or amend active/review/completed/stopped Tasks.
    - Task: `task create|start|run|submit` with the explicit contract and worktree handoff.
    - Decisions and reusable results: `decision show|resolve`, `result add|list|show|rebuild` only for an explicit user choice or reviewed result. `reviewed|verified` results require reviewer and real source/artifact evidence.
    - Background work: `queue enqueue|list|status|cancel|resume` and `worker run|start|stop`; never auto-resume `interrupted` work.

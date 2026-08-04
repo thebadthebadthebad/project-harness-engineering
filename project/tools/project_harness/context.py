@@ -29,6 +29,129 @@ def next_actions(items: list[dict[str, str]]) -> list[str]:
     return actions or ["define or create the next Task"]
 
 
+def _v2_authority(root: Path) -> bool:
+    """Return whether canonical v2 state owns this Project."""
+    path = root / ".harness/install.json"
+    if not path.is_file():
+        return False
+    try:
+        payload = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return False
+    return isinstance(payload, dict) and payload.get("authority") == "v2"
+
+
+def v2_project_context(root: Path) -> dict[str, Any]:
+    """Build Project context exclusively from canonical v2 records."""
+    from .v2 import harness_root, read_json, validate_record
+
+    base = harness_root(root)
+    project_path = base / "project.json"
+    project = read_json(project_path)
+    validate_record(project, "project")
+    tasks: list[dict[str, Any]] = []
+    handoffs: dict[str, Any] = {}
+    sources = {".harness/project.json": project["content_digest"]}
+    for path in sorted((base / "tasks").glob("*/task.json")):
+        task = read_json(path)
+        validate_record(task, "task")
+        task_id = str(task["id"])
+        status = str(task.get("state", {}).get("task_status"))
+        tasks.append(
+            {
+                "task": task_id,
+                "status": status,
+                "goal": task.get("goal", ""),
+                "dependencies": task.get("dependencies", []),
+                "decision_id": task.get("state", {}).get("decision_id"),
+            }
+        )
+        sources[str(path.relative_to(root))] = task["content_digest"]
+        handoff_path = path.parent / "handoff.json"
+        if status == "review" and handoff_path.is_file():
+            handoff = read_json(handoff_path)
+            validate_record(handoff, "handoff")
+            handoffs[task_id] = {
+                "status": handoff.get("status"),
+                "summary": handoff.get("summary"),
+                "findings": handoff.get("findings", []),
+                "limitations": handoff.get("limitations", []),
+            }
+            sources[str(handoff_path.relative_to(root))] = handoff["content_digest"]
+    actions: list[str] = []
+    for task in tasks:
+        status = task["status"]
+        if status == "ready":
+            actions.append("start or amend Task: " + task["task"])
+        elif status == "active":
+            actions.append("continue active Task: " + task["task"])
+        elif status == "review":
+            actions.append("review handoff and prepare Promotion: " + task["task"])
+        elif status == "needs_decision":
+            actions.append("resolve Task decision: " + task["task"])
+        elif status == "blocked":
+            actions.append("inspect blocked Task: " + task["task"])
+    record_event(root, "context", {"context_role": "project", "documents": sorted(sources)})
+    return {
+        "role": "project",
+        "root": str(root),
+        "authority": "v2",
+        "goal": project.get("goal", ""),
+        "scope": project.get("scope", []),
+        "current_goal": project.get("current_objective", ""),
+        "project_revision": project.get("revision"),
+        "last_amendment": project.get("last_amendment"),
+        "tasks": tasks,
+        "handoffs": handoffs,
+        "next_actions": actions or ["define or create the next Task"],
+        "sources": sources,
+    }
+
+
+def v2_task_context(root: Path, task_id: str) -> dict[str, Any]:
+    """Build one Task context exclusively from its canonical v2 contract."""
+    from .v2 import read_task, task_record_path
+
+    task = read_task(root, task_id)
+    status = str(task.get("state", {}).get("task_status"))
+    path = task_record_path(root, task_id)
+    actions = {
+        "ready": "start or amend this Task",
+        "active": "continue this Task in its isolated worktree",
+        "needs_decision": "resolve the pending decision before continuing",
+        "blocked": "resolve the blocker or amend the paused contract",
+        "review": "parent Agent reviews handoff and prepares Promotion",
+        "completed": "retain result and Promotion evidence",
+        "stopped": "create a replacement Task if work should resume",
+    }
+    sources = {str(path.relative_to(root)): task["content_digest"]}
+    record_event(
+        root,
+        "context",
+        {"context_role": "task", "context_task": task_id, "documents": sorted(sources)},
+    )
+    return {
+        "role": "task",
+        "root": str(root),
+        "authority": "v2",
+        "task": task_id,
+        "status": status,
+        "revision": task.get("revision"),
+        "final_goal": task.get("goal", ""),
+        "contract": {
+            key: task.get(key)
+            for key in (
+                "scope", "inputs", "outputs", "acceptance", "dependencies",
+                "context_refs", "owned_write_paths", "validation_commands", "execution",
+            )
+        },
+        "state": task.get("state", {}),
+        "last_amendment": task.get("last_amendment"),
+        "next_actions": [actions.get(status, "inspect Task state")],
+        "sources": sources,
+    }
+
+
 def project_context(root: Path) -> dict[str, Any]:
     """Build dynamic Project context plus only handoffs awaiting Project close."""
     project_path = root / "PROJECT.md"
@@ -133,6 +256,8 @@ def task_context(root: Path, task: Path) -> dict[str, Any]:
 
 def resolve_context(root: Path, requested_task: str | None, cwd: Path | None = None) -> dict[str, Any]:
     """Resolve Project or Task context from an explicit Task name or current directory."""
+    if _v2_authority(root):
+        return v2_task_context(root, requested_task) if requested_task else v2_project_context(root)
     current = (cwd or Path.cwd()).resolve()
     task = task_path(root, requested_task) if requested_task else None
     if task is not None and not task.is_dir():

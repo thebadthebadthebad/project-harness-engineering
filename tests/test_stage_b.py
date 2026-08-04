@@ -152,6 +152,109 @@ print(json.dumps({'type':'turn.completed','usage':{'input_tokens':tokens,'output
     def start(self, root: Path, name: str) -> None:
         self.ctl(root, "task", "start", name)
 
+    def test_project_amendment_previews_markdown_and_context_uses_canonical_state(self) -> None:
+        root = self.project()
+        proposal = root / "docs/project-amendment.md"
+        proposal.write_text(
+            self.ctl(root, "show", "project").stdout
+            .replace("\nGoal\n", "\nRevised goal\n", 1)
+            .replace("- Scope", "- Revised scope", 1)
+            .replace("\nGoal\n\n## Canonical Roots", "\nRevised objective\n\n## Canonical Roots", 1)
+        )
+        preview = json.loads(
+            self.ctl(
+                root, "project", "amend", "--from-markdown", "docs/project-amendment.md",
+                "--reason", "User refined the project", "--actor", "user",
+            ).stdout
+        )
+        self.assertFalse(preview["applied"])
+        self.assertEqual(1, preview["expected_revision"])
+        self.assertEqual("Goal", json.loads((root / ".harness/project.json").read_text())["goal"])
+        before = json.loads(self.ctl(root, "context", "--json").stdout)
+        self.assertEqual("Goal", before["goal"])
+
+        applied = json.loads(
+            self.ctl(
+                root, "project", "amend", "--from-markdown", "docs/project-amendment.md",
+                "--reason", "User refined the project", "--actor", "user",
+                "--expected-revision", "1", "--apply",
+            ).stdout
+        )
+        self.assertTrue(applied["applied"])
+        self.assertEqual(2, applied["new_revision"])
+        context = json.loads(self.ctl(root, "context", "--json").stdout)
+        self.assertEqual("v2", context["authority"])
+        self.assertEqual("Revised goal", context["goal"])
+        self.assertEqual("Revised objective", context["current_goal"])
+        self.assertIn(".harness/project.json", context["sources"])
+        self.assertIn("User refined the project", self.ctl(root, "show", "project").stdout)
+        self.ctl(root, "check")
+
+        stale = self.ctl(
+            root, "project", "amend", "--goal", "Another goal",
+            "--reason", "Stale update", "--actor", "user",
+            "--expected-revision", "1", "--apply", ok=False,
+        )
+        self.assertIn("stale Project revision", stale.stderr)
+        missing_approval = self.ctl(
+            root, "project", "amend", "--goal", "Agent goal",
+            "--reason", "Agent proposal", "--actor", "agent", ok=False,
+        )
+        self.assertIn("user approval reference", missing_approval.stderr)
+
+    def test_task_amendment_updates_ready_contract_and_rejects_active_change(self) -> None:
+        root = self.project()
+        self.ctl(
+            root, "task", "create", "draft-one", "--goal", "Draft goal",
+            "--scope", "Draft scope", "--output", "src/old.txt",
+            "--acceptance", "Old acceptance", "--owned-path", "task-output",
+            "--validation-command", "python3 -c pass",
+        )
+        proposal = root / "docs/task-amendment.md"
+        proposal.write_text(
+            self.ctl(root, "task", "show", "draft-one").stdout
+            .replace("\nDraft goal\n", "\nRevised Task goal\n", 1)
+            .replace("`src/old.txt`", "`src/new.txt`", 1)
+            .replace("- Old acceptance", "- New acceptance", 1)
+        )
+        preview = json.loads(
+            self.ctl(
+                root, "task", "amend", "draft-one", "--from-markdown",
+                "docs/task-amendment.md", "--model", "gpt-test",
+                "--reason", "Approved contract refinement", "--actor", "agent",
+                "--approval-ref", "user-message:42",
+            ).stdout
+        )
+        self.assertFalse(preview["applied"])
+        self.assertIn("execution", preview["changes"])
+        applied = json.loads(
+            self.ctl(
+                root, "task", "amend", "draft-one", "--from-markdown",
+                "docs/task-amendment.md", "--model", "gpt-test",
+                "--reason", "Approved contract refinement", "--actor", "agent",
+                "--approval-ref", "user-message:42", "--expected-revision", "1", "--apply",
+            ).stdout
+        )
+        self.assertEqual(2, applied["new_revision"])
+        task = json.loads((root / ".harness/tasks/draft-one/task.json").read_text())
+        self.assertEqual("Revised Task goal", task["goal"])
+        self.assertEqual(["src/new.txt"], task["outputs"])
+        self.assertEqual("gpt-test", task["execution"]["model"])
+        self.assertIn("task-output", task["owned_write_paths"])
+        self.assertIn(".harness-agent-handoff.json", task["owned_write_paths"])
+        task_context = json.loads(self.ctl(root, "context", "--task", "draft-one", "--json").stdout)
+        self.assertEqual("Revised Task goal", task_context["final_goal"])
+        self.assertEqual(2, task_context["revision"])
+        self.ctl(root, "check")
+
+        self.commit_state(root, "amend task")
+        self.start(root, "draft-one")
+        rejected = self.ctl(
+            root, "task", "amend", "draft-one", "--goal", "Mid-run change",
+            "--reason", "Unsafe", "--actor", "user", ok=False,
+        )
+        self.assertIn("can only be amended while ready", rejected.stderr)
+
     def test_capability_fallback_is_applied_to_real_argv_and_handoff(self) -> None:
         root = self.project()
         self.create_codex_task(root, "agent-one")

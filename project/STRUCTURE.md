@@ -5,7 +5,7 @@
 ## Authority and Distribution
 
 - 각 적용 Project는 자신의 `.harness` 상태와 Git 이력을 독립적으로 소유한다. Harness Engineering 저장소는 bundle 원본·버전만 배포하며 적용 Project를 검색하거나 등록하지 않는다.
-- `.harness/install.json`의 `authority`가 `legacy`이면 기존 Markdown lifecycle이 원본이다. `v2`이면 sealed JSON record가 원본이고 `projectctl show`, `task show/review`, `decision show`, `promotion show`, `result show`가 읽기 쉬운 Markdown View를 생성한다. `projectctl check`는 v2 record의 schema, digest, internal reference, Result index와 artifact provenance를 전수 검사한다.
+- `.harness/install.json`의 `authority`가 `legacy`이면 기존 Markdown lifecycle이 원본이다. `v2`이면 sealed JSON record가 원본이고 `projectctl show`, `task show/review`, `decision show`, `promotion show`, `result show`가 읽기 쉬운 Markdown View를 생성한다. `project amend|task amend`만 revision CAS 아래 canonical 계약을 바꾼다. `projectctl check`는 v2 record의 schema, digest, internal reference, Result index와 artifact provenance를 전수 검사한다.
 - 공용 bundle의 `managed` 파일은 checksum 기반으로 갱신한다. `bootstrap` 파일은 없을 때만 만들고, `integration` 파일은 기존 사용자 내용을 보존한다.
 - root distribution의 `harnessctl`은 `package|new|apply|update`를 담당한다. 적용 뒤 각 Project의 로컬 `tools/projectctl.py`가 상태와 Task를 담당하므로 중앙 설치에 실행 의존하지 않는다.
 
@@ -25,16 +25,18 @@
 
 ## Document Roles
 
-- `PROJECT.md`: 프로젝트의 안정적인 Goal과 Scope
-- `STATE.md`: Current Goal과 현재 Goal에서 관리 중인 Task
+- `PROJECT.md`: legacy authority에서는 Project Goal과 Scope 원본, v2 신규 설치에서는 사람이 읽는 bootstrap 설명
+- `STATE.md`: legacy authority에서는 Current Goal과 Task 상태 원본, v2에서는 canonical context가 `.harness` record를 사용
 - `AGENTS.md`: 저장소 전체에 지속적으로 적용할 규칙
 - `STRUCTURE.md`: Project/Task 운영 구조와 결정적 도구 사용법
 - `GUIDE.md`: 사용자가 따라 하는 생성·세션 전환·장애 대응 절차
-- Task `TASK.md`: Scope, 입력, 절차, 산출물, 완료 조건
+- Task `TASK.md`: legacy Task 계약 원본. v2 Task는 `task show` Markdown proposal과 `.harness/tasks/<id>/task.json`을 사용
 - Task `STATUS.md`: Final Goal, Work Plan, Current Work, 현재 Status
 - Task `REPORT.md`: 종료된 Task의 최종 handoff
 
 Agent는 새 세션 또는 컨텍스트 압축 후 `projectctl context`를 한 번 실행해 이 문서들의 현재 운영 정보를 함께 확인한다. 같은 세션의 매 요청마다 문서를 다시 읽지 않는다.
+
+v2의 일반 제품 문서와 코드는 Git workflow 안에서 직접 수정할 수 있다. Project 목표와 Task 실행 계약은 여러 Agent가 같은 의미를 보도록 controlled amendment를 사용한다. Preview는 before/after와 expected revision을 보여주며 apply는 reason·actor를 record에 남긴다. Agent actor에는 사용자 approval reference가 필수지만 이 문자열은 인증이 아니므로 실제 대화와 Git review를 함께 확인한다. Decision은 실행 중 선택, Promotion은 Task 산출물 반영, amendment는 계약 자체 변경만 담당한다.
 
 ## Directory Responsibilities
 
@@ -142,6 +144,8 @@ projectctl task baseline 실행
 
 코드는 `src/` 또는 `tools/`에서 선택해 Task `scripts/`로 복사한다. 공식 데이터는 Task `data/`에 상대 symlink로 연결한다.
 
+v2 Task가 아직 `ready`이거나 명시적으로 대기 중인 `needs_decision|blocked`이면 `task amend`로 계약을 개정할 수 있다. `active|review|completed|stopped`에서는 현재 실행의 의미를 바꾸지 않고 follow-up 또는 replacement Task를 만든다.
+
 ## Completion
 
 ```text
@@ -194,6 +198,7 @@ projectctl promotion record로 promoted 또는 not-promoted History 기록
 ## Deterministic Controls
 
 - `projectctl context`: 새 세션에 현재 계약과 종료 대기 handoff를 한 번 제공한다.
+- `projectctl project amend|task amend`: 생성 후 canonical 계약의 변경 preview, revision CAS 적용과 변경 provenance를 담당한다.
 - `projectctl check`: 필수 구조와 문서 section, legacy STATE 또는 v2 canonical schema·digest·reference·Result artifact/index, ADR·History 이름, Hook·Skill·agent 설정을 검사한다.
 - `task validate`: lifecycle 단계별 STATUS, Work Plan, REPORT 형식을 검사한다.
 - `task baseline|audit`: clean Git 기준점, linked data checksum, Task 밖 변경을 검사한다.

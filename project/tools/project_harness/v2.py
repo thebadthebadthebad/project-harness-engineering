@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import shlex
 import shutil
 import subprocess
 import time
@@ -217,6 +218,7 @@ def render_project(root: Path) -> str:
         "",
         "> Generated view. Authority: `.harness/project.json`",
         "> Source digest: `" + payload["content_digest"] + "`",
+        "> Save this view inside the Project, edit Goal/Scope/Current Objective, then use `project amend --from-markdown` to preview it.",
         "",
         "## Goal",
         "",
@@ -229,7 +231,170 @@ def render_project(root: Path) -> str:
     lines.extend(["", "## Current Objective", "", str(payload.get("current_objective", "")), ""])
     lines.extend(["## Canonical Roots", ""])
     lines.extend("- `" + str(item) + "`" for item in payload.get("canonical_roots", []))
+    amendment = payload.get("last_amendment")
+    if amendment:
+        lines.extend(
+            [
+                "",
+                "## Last Amendment",
+                "",
+                "- Revision: " + str(payload["revision"]),
+                "- Actor: " + str(amendment.get("actor")),
+                "- Reason: " + str(amendment.get("reason")),
+                "- Approval reference: " + str(amendment.get("approval_ref") or "direct user change"),
+                "- Recorded at: " + str(amendment.get("recorded_at")),
+            ]
+        )
     return "\n".join(lines).rstrip() + "\n"
+
+
+def _proposal_list(text: str, heading: str) -> list[str]:
+    """Read a simple Markdown bullet section from an amendment proposal."""
+    values: list[str] = []
+    for line in section(text, heading).splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("- "):
+            continue
+        value = stripped[2:].strip()
+        if value == "None":
+            continue
+        if value.startswith("`") and value.endswith("`"):
+            value = value[1:-1]
+        if value:
+            values.append(value)
+    return values
+
+
+def project_updates_from_markdown(root: Path, proposal: str) -> dict[str, Any]:
+    """Parse editable Project fields from one Project-contained Markdown proposal."""
+    path = contained_path(root, proposal, must_exist=True)
+    text = path.read_text(encoding="utf-8")
+    updates: dict[str, Any] = {
+        "goal": section(text, "Goal"),
+        "scope": _proposal_list(text, "Scope"),
+    }
+    try:
+        updates["current_objective"] = section(text, "Current Objective")
+    except HarnessError:
+        pass
+    return updates
+
+
+def task_updates_from_markdown(root: Path, proposal: str) -> dict[str, Any]:
+    """Parse the editable core contract from one Task Markdown proposal."""
+    path = contained_path(root, proposal, must_exist=True)
+    text = path.read_text(encoding="utf-8")
+    commands: list[list[str]] = []
+    for raw in _proposal_list(text, "Validation Commands"):
+        try:
+            command = shlex.split(raw)
+        except ValueError as error:
+            raise HarnessError("invalid validation command in amendment proposal") from error
+        if not command:
+            raise HarnessError("validation command cannot be empty")
+        commands.append(command)
+    return {
+        "goal": section(text, "Goal"),
+        "scope": section(text, "Scope"),
+        "outputs": _proposal_list(text, "Outputs"),
+        "dependencies": _proposal_list(text, "Dependencies"),
+        "owned_write_paths": _proposal_list(text, "Owned Write Paths"),
+        "acceptance": _proposal_list(text, "Acceptance"),
+        "validation_commands": commands,
+        "context_refs": _proposal_list(text, "Context References"),
+    }
+
+
+def _amendment_metadata(reason: str, actor: str, approval_ref: str | None) -> dict[str, Any]:
+    """Build explicit, non-authenticating provenance for one contract amendment."""
+    if not reason.strip():
+        raise HarnessError("amendment reason is required")
+    if actor not in {"user", "agent"}:
+        raise HarnessError("amendment actor must be user or agent")
+    if actor == "agent" and not (approval_ref or "").strip():
+        raise HarnessError("agent amendment requires a user approval reference")
+    return {
+        "reason": reason.strip(),
+        "actor": actor,
+        "approval_ref": (approval_ref or "").strip() or None,
+        "recorded_at": utc_now(),
+    }
+
+
+def _amendment_preview(
+    payload: dict[str, Any], updates: dict[str, Any], metadata: dict[str, Any]
+) -> dict[str, Any]:
+    """Return a stable before/after packet for changed canonical fields."""
+    changes = {
+        key: {"before": payload.get(key), "after": value}
+        for key, value in updates.items()
+        if payload.get(key) != value
+    }
+    if not changes:
+        raise HarnessError("amendment does not change the canonical record")
+    return {
+        "record_type": payload["record_type"],
+        "record_id": payload["id"],
+        "expected_revision": payload["revision"],
+        "expected_digest": payload["content_digest"],
+        "changes": changes,
+        "reason": metadata["reason"],
+        "actor": metadata["actor"],
+        "approval_ref": metadata["approval_ref"],
+        "applied": False,
+    }
+
+
+@canonical_mutation
+def amend_project(
+    root: Path,
+    updates: dict[str, Any],
+    expected_revision: int | None,
+    reason: str,
+    actor: str,
+    approval_ref: str | None,
+    apply_change: bool,
+) -> dict[str, Any]:
+    """Preview or apply one controlled Project contract amendment."""
+    require_v2(root)
+    path = harness_root(root) / "project.json"
+    payload = read_json(path)
+    validate_record(payload, "project")
+    allowed = {"goal", "scope", "current_objective", "invariants", "canonical_roots"}
+    unknown = sorted(set(updates) - allowed)
+    if unknown:
+        raise HarnessError("unsupported Project amendment fields: " + ", ".join(unknown))
+    normalized = dict(updates)
+    for field in ("goal", "current_objective"):
+        if field in normalized and (not isinstance(normalized[field], str) or not normalized[field].strip()):
+            raise HarnessError("Project " + field + " cannot be empty")
+    for field in ("scope", "invariants", "canonical_roots"):
+        if field in normalized:
+            if not isinstance(normalized[field], list) or not all(
+                isinstance(item, str) and item.strip() for item in normalized[field]
+            ):
+                raise HarnessError("Project " + field + " must be a non-empty string list")
+    if "scope" in normalized and not normalized["scope"]:
+        raise HarnessError("Project scope cannot be empty")
+    metadata = _amendment_metadata(reason, actor, approval_ref)
+    preview = _amendment_preview(payload, normalized, metadata)
+    if not apply_change:
+        return preview
+    if expected_revision is None:
+        raise HarnessError("--expected-revision is required with --apply")
+    if payload["revision"] != expected_revision:
+        raise HarnessError(
+            "stale Project revision: expected " + str(expected_revision)
+            + ", current " + str(payload["revision"])
+        )
+    changed = _replace_record(path, payload, **normalized, last_amendment=metadata)
+    _bump_generation(root)
+    return {
+        **preview,
+        "applied": True,
+        "new_revision": changed["revision"],
+        "new_digest": changed["content_digest"],
+    }
 
 
 def _canonical_record_paths(root: Path) -> list[tuple[Path, str]]:
@@ -295,6 +460,19 @@ def check_v2_authority(root: Path) -> list[str]:
     project_path = base / "project.json"
     if project_path not in records:
         errors.append(".harness/project.json: missing or invalid canonical Project record")
+    else:
+        project = records[project_path]
+        if not isinstance(project.get("goal"), str) or not project["goal"].strip():
+            errors.append(".harness/project.json: goal must be a non-empty string")
+        if not isinstance(project.get("current_objective"), str) or not project["current_objective"].strip():
+            errors.append(".harness/project.json: current_objective must be a non-empty string")
+        for field in ("scope", "invariants", "canonical_roots"):
+            if not isinstance(project.get(field), list) or not all(
+                isinstance(item, str) and item.strip() for item in project.get(field, [])
+            ):
+                errors.append(".harness/project.json: " + field + " must be a string list")
+        if not project.get("scope"):
+            errors.append(".harness/project.json: scope cannot be empty")
 
     task_records = {
         path.parent.name: payload
@@ -315,6 +493,9 @@ def check_v2_authority(root: Path) -> list[str]:
         if task.get("id") != task_id:
             errors.append(".harness/tasks/" + task_id + "/task.json: id does not match path")
         state = task.get("state")
+        for field in ("goal", "scope"):
+            if not isinstance(task.get(field), str) or not task[field].strip():
+                errors.append(".harness/tasks/" + task_id + "/task.json: " + field + " must be a non-empty string")
         legacy_imported = isinstance(state, dict) and "legacy_state_extra" in state
         for field in (
             "outputs", "acceptance", "dependencies", "context_refs",
@@ -336,6 +517,21 @@ def check_v2_authority(root: Path) -> list[str]:
             errors.append("Task " + task_id + " has invalid state")
         elif state.get("decision_id") and state["decision_id"] not in decision_records:
             errors.append("Task " + task_id + " has missing pending Decision")
+
+    for path, payload in records.items():
+        amendment = payload.get("last_amendment")
+        if amendment is None:
+            continue
+        relative = str(path.relative_to(root))
+        if not isinstance(amendment, dict):
+            errors.append(relative + ": last_amendment must be an object")
+            continue
+        if amendment.get("actor") not in {"user", "agent"}:
+            errors.append(relative + ": last_amendment actor is invalid")
+        if not isinstance(amendment.get("reason"), str) or not amendment["reason"].strip():
+            errors.append(relative + ": last_amendment reason is required")
+        if amendment.get("actor") == "agent" and not amendment.get("approval_ref"):
+            errors.append(relative + ": agent amendment requires approval_ref")
 
     for path, handoff in (
         (path, payload) for path, payload in records.items() if path.name == "handoff.json"
@@ -774,36 +970,8 @@ def migration_rollback(root: Path, migration_id: str) -> dict[str, Any]:
     return install
 
 
-@canonical_mutation
-def create_v2_task(
-    root: Path,
-    task_id: str,
-    goal: str,
-    scope: str,
-    outputs: Sequence[str],
-    acceptance: Sequence[str],
-    owned_write_paths: Sequence[str],
-    validation_commands: Sequence[Sequence[str]],
-    execution: dict[str, Any] | None = None,
-    context_refs: Sequence[str] = (),
-    dependencies: Sequence[str] = (),
-    inputs: Sequence[str] = (),
-) -> dict[str, Any]:
-    """Create one ready v2 Task contract."""
-    require_v2(root)
-    if not TASK_ID.fullmatch(task_id):
-        raise HarnessError("Task id must use lowercase kebab-case")
-    path = harness_root(root) / "tasks" / task_id / "task.json"
-    if path.exists():
-        raise HarnessError("Task already exists")
-    for dependency in dependencies:
-        if not task_record_path(root, dependency).is_file():
-            raise HarnessError("Task dependency does not exist: " + dependency)
-    for reference in context_refs:
-        if not _reference_exists(root, reference):
-            raise HarnessError("invalid or missing context reference: " + reference)
-    for raw in owned_write_paths:
-        safe_relative(raw)
+def _task_input_records(root: Path, inputs: Sequence[str]) -> list[dict[str, Any]]:
+    """Build bounded, content-addressed Task input records."""
     input_records = []
     total_input_bytes = 0
     for raw in inputs:
@@ -828,23 +996,108 @@ def create_v2_task(
                 "bytes": len(data),
             }
         )
-    owned_paths = list(owned_write_paths)
-    if execution is not None and ".harness-agent-handoff.json" not in owned_paths:
-        owned_paths.append(".harness-agent-handoff.json")
+    return input_records
+
+
+def _validate_task_contract(
+    root: Path, task_id: str, values: dict[str, Any]
+) -> dict[str, Any]:
+    """Normalize and validate mutable Task contract fields."""
+    normalized = dict(values)
+    for field in ("goal", "scope"):
+        if field in normalized and (not isinstance(normalized[field], str) or not normalized[field].strip()):
+            raise HarnessError("Task " + field + " cannot be empty")
+    for field in (
+        "outputs", "acceptance", "dependencies", "context_refs",
+        "owned_write_paths",
+    ):
+        if field in normalized and not isinstance(normalized[field], list):
+            raise HarnessError("Task " + field + " must be a list")
+        if field in normalized and not all(
+            isinstance(item, str) and item for item in normalized[field]
+        ):
+            raise HarnessError("Task " + field + " must contain non-empty strings")
+    for field in ("validation_commands", "inputs"):
+        if field in normalized and not isinstance(normalized[field], list):
+            raise HarnessError("Task " + field + " must be a list")
+    for dependency in normalized.get("dependencies", []):
+        if dependency == task_id:
+            raise HarnessError("Task cannot depend on itself")
+        if not task_record_path(root, dependency).is_file():
+            raise HarnessError("Task dependency does not exist: " + str(dependency))
+    for reference in normalized.get("context_refs", []):
+        if not _reference_exists(root, str(reference)):
+            raise HarnessError("invalid or missing context reference: " + str(reference))
+    for raw in normalized.get("owned_write_paths", []):
+        safe_relative(str(raw))
+    for command in normalized.get("validation_commands", []):
+        if not isinstance(command, list) or not command or not all(
+            isinstance(item, str) and item for item in command
+        ):
+            raise HarnessError("validation commands must be non-empty argv lists")
+    execution = normalized.get("execution", ...)
+    if execution is not ... and execution is not None and not isinstance(execution, dict):
+        raise HarnessError("Task execution contract must be an object or null")
+    if isinstance(execution, dict):
+        owned = list(normalized.get("owned_write_paths", []))
+        if ".harness-agent-handoff.json" not in owned:
+            owned.append(".harness-agent-handoff.json")
+        normalized["owned_write_paths"] = owned
+    return normalized
+
+
+@canonical_mutation
+def create_v2_task(
+    root: Path,
+    task_id: str,
+    goal: str,
+    scope: str,
+    outputs: Sequence[str],
+    acceptance: Sequence[str],
+    owned_write_paths: Sequence[str],
+    validation_commands: Sequence[Sequence[str]],
+    execution: dict[str, Any] | None = None,
+    context_refs: Sequence[str] = (),
+    dependencies: Sequence[str] = (),
+    inputs: Sequence[str] = (),
+) -> dict[str, Any]:
+    """Create one ready v2 Task contract."""
+    require_v2(root)
+    if not TASK_ID.fullmatch(task_id):
+        raise HarnessError("Task id must use lowercase kebab-case")
+    path = harness_root(root) / "tasks" / task_id / "task.json"
+    if path.exists():
+        raise HarnessError("Task already exists")
+    values = _validate_task_contract(
+        root,
+        task_id,
+        {
+            "goal": goal,
+            "scope": scope,
+            "outputs": list(outputs),
+            "acceptance": list(acceptance),
+            "dependencies": list(dependencies),
+            "context_refs": list(context_refs),
+            "owned_write_paths": list(owned_write_paths),
+            "validation_commands": [list(item) for item in validation_commands],
+            "execution": execution,
+        },
+    )
+    input_records = _task_input_records(root, inputs)
     record = _new_record(
         "task",
         task_id,
         objective_id="current",
-        goal=goal,
-        scope=scope,
+        goal=values["goal"],
+        scope=values["scope"],
         inputs=input_records,
-        outputs=list(outputs),
-        acceptance=list(acceptance),
-        dependencies=list(dependencies),
-        context_refs=list(context_refs),
-        owned_write_paths=owned_paths,
-        validation_commands=[list(item) for item in validation_commands],
-        execution=execution,
+        outputs=values["outputs"],
+        acceptance=values["acceptance"],
+        dependencies=values["dependencies"],
+        context_refs=values["context_refs"],
+        owned_write_paths=values["owned_write_paths"],
+        validation_commands=values["validation_commands"],
+        execution=values["execution"],
         state={"task_status": "ready", "base_commit": None},
     )
     write_json(path, record)
@@ -864,6 +1117,88 @@ def read_task(root: Path, task_id: str) -> dict[str, Any]:
     payload = read_json(task_record_path(root, task_id))
     validate_record(payload, "task")
     return payload
+
+
+def _merge_execution_contract(
+    current: dict[str, Any] | None, patch: dict[str, Any]
+) -> dict[str, Any]:
+    """Merge a sparse CLI execution patch without discarding unrelated policy."""
+    merged = dict(current or {})
+    for key, value in patch.items():
+        if key in {"limits", "fallback", "agent"}:
+            nested = dict(merged.get(key) or {})
+            nested.update(value)
+            merged[key] = nested
+        else:
+            merged[key] = value
+    return merged
+
+
+@canonical_mutation
+def amend_task(
+    root: Path,
+    task_id: str,
+    updates: dict[str, Any],
+    expected_revision: int | None,
+    reason: str,
+    actor: str,
+    approval_ref: str | None,
+    apply_change: bool,
+    execution_patch: dict[str, Any] | None = None,
+    clear_execution: bool = False,
+    input_paths: Sequence[str] | None = None,
+) -> dict[str, Any]:
+    """Preview or apply one controlled, paused-state Task contract amendment."""
+    require_v2(root)
+    path = task_record_path(root, task_id)
+    payload = read_task(root, task_id)
+    state = str(payload.get("state", {}).get("task_status"))
+    if state not in {"ready", "needs_decision", "blocked"}:
+        raise HarnessError(
+            "Task contract can only be amended while ready, needs_decision, or blocked; current state: "
+            + state
+        )
+    allowed = {
+        "goal", "scope", "outputs", "acceptance", "dependencies", "context_refs",
+        "owned_write_paths", "validation_commands",
+    }
+    unknown = sorted(set(updates) - allowed)
+    if unknown:
+        raise HarnessError("unsupported Task amendment fields: " + ", ".join(unknown))
+    normalized = dict(updates)
+    if input_paths is not None:
+        normalized["inputs"] = _task_input_records(root, input_paths)
+    if clear_execution and execution_patch:
+        raise HarnessError("cannot clear and update the execution contract together")
+    if clear_execution:
+        normalized["execution"] = None
+    elif execution_patch:
+        normalized["execution"] = _merge_execution_contract(
+            payload.get("execution"), execution_patch
+        )
+        normalized.setdefault(
+            "owned_write_paths", list(payload.get("owned_write_paths", []))
+        )
+    normalized = _validate_task_contract(root, task_id, normalized)
+    metadata = _amendment_metadata(reason, actor, approval_ref)
+    preview = _amendment_preview(payload, normalized, metadata)
+    if not apply_change:
+        return preview
+    if expected_revision is None:
+        raise HarnessError("--expected-revision is required with --apply")
+    if payload["revision"] != expected_revision:
+        raise HarnessError(
+            "stale Task revision: expected " + str(expected_revision)
+            + ", current " + str(payload["revision"])
+        )
+    changed = _replace_record(path, payload, **normalized, last_amendment=metadata)
+    _bump_generation(root)
+    return {
+        **preview,
+        "applied": True,
+        "new_revision": changed["revision"],
+        "new_digest": changed["content_digest"],
+    }
 
 
 def _append_list(lines: list[str], heading: str, values: Sequence[Any], code: bool = False) -> None:
@@ -911,6 +1246,7 @@ def render_task(root: Path, task_id: str) -> str:
         "# Task " + task_id,
         "",
         "> Generated view. Source digest: `" + task["content_digest"] + "`",
+        "> Save this view inside the Project, edit contract sections, then use `task amend --from-markdown` to preview it.",
         "",
         "## Goal",
         "",
@@ -945,6 +1281,20 @@ def render_task(root: Path, task_id: str) -> str:
     _append_list(lines, "Context References", task.get("context_refs", []), code=True)
     if task.get("execution") is not None:
         _append_execution_contract(lines, task["execution"])
+    amendment = task.get("last_amendment")
+    if amendment:
+        lines.extend(
+            [
+                "",
+                "## Last Amendment",
+                "",
+                "- Revision: " + str(task["revision"]),
+                "- Actor: " + str(amendment.get("actor")),
+                "- Reason: " + str(amendment.get("reason")),
+                "- Approval reference: " + str(amendment.get("approval_ref") or "direct user change"),
+                "- Recorded at: " + str(amendment.get("recorded_at")),
+            ]
+        )
     return "\n".join(lines).rstrip() + "\n"
 
 

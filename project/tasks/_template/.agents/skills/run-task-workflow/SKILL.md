@@ -14,6 +14,7 @@ Execute the current Task contract without assuming shared Project-session contex
    - Document: intended reader, authoritative sources, required structure, unsupported claims, and link/readability review.
    - Research: question and source policy, query/retrieval conditions, inclusion/exclusion, claim evidence, contradictions, and uncertainty.
    Do not create extra profile documents when the Task contract already expresses these requirements.
+   If the canonical goal, scope, ownership, validation, or execution contract is wrong, stop the affected work and request a Project-session amendment. Do not edit canonical JSON or silently broaden the contract inside the Task session.
 4. Update `STATUS.md` only when the current Work item changes. Keep exactly one `doing` item while active.
 5. Validate changed code or evidence in proportion to the work. Record reproducible commands and distinguish deterministic checks from Agent or user judgment. Do not treat format checks as a substitute for result interpretation.
 6. When all completion criteria are met, complete `REPORT.md`, set every Work Plan item to `completed`, set Current Work to `None`, and set Status to `completed`. Use `stopped` only when the work cannot or should not continue, with no `doing` item.

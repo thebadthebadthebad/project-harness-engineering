@@ -26,7 +26,7 @@ python3 tools/projectctl.py show project
 git status --short
 ```
 
-`show project`의 Goal과 Scope가 의도와 다르면 Task를 시작하기 전에 수정한다. 설치된 Hook은 fail-open 관찰 장치이므로 `.codex/hooks.json`과 `.codex/hooks/observe.py`를 직접 검토하고 Codex `/hooks`에서 신뢰 상태를 확인한다.
+`show project`의 Goal과 Scope가 의도와 다르면 Task를 시작하기 전에 `project amend`로 preview하고 수정한다. `.harness/*.json`을 직접 편집하지 않는다. 설치된 Hook은 fail-open 관찰 장치이므로 `.codex/hooks.json`과 `.codex/hooks/observe.py`를 직접 검토하고 Codex `/hooks`에서 신뢰 상태를 확인한다.
 
 ## 일반 작업 흐름
 
@@ -63,6 +63,12 @@ python3 tools/projectctl.py task start update-parser
 ```
 
 사람이 worktree에서 작업해 typed handoff를 제출하거나, Task에 `--codex` 실행 계약을 추가해 `task run` 또는 queue worker로 실행할 수 있다. 전체 명령과 handoff 형식은 `GUIDE.md`에 있다.
+
+## 생성 후 목표와 Task 계약 수정
+
+Project와 Task는 생성 뒤에도 고칠 수 있다. `show project` 또는 `task show`를 Project 안의 Markdown proposal로 저장해 사람이 직접 편집한 다음 `project amend --from-markdown` 또는 `task amend --from-markdown`으로 preview한다. 실제 반영은 현재 revision, 변경 이유, actor와 `--apply`를 명시할 때만 일어난다.
+
+Agent가 적용할 때는 사용자 승인 메시지나 해결된 Decision을 `--approval-ref`로 기록해야 한다. 이는 인증 수단이 아니라 Git과 함께 검토하는 provenance다. ready·needs_decision·blocked Task만 개정할 수 있으며 active·review·완료 Task의 계약은 실행 중 몰래 바꾸지 않는다. 상세 예시는 `GUIDE.md`의 생성 후 계약 개정 절차를 따른다.
 
 ## 사람과 Agent의 책임
 
